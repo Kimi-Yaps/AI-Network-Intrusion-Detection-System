@@ -1,0 +1,4 @@
+project-includes = ["backend/**/*.py"]
+search-path = ["backend", ".venv/Lib/site-packages"]
+python-interpreter = ".venv/Scripts/python.exe"
+

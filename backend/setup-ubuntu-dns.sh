@@ -35,7 +35,9 @@ add-apt-repository -y ppa:oisf/suricata-stable
 apt-get update -y
 apt-get install -y suricata
 
-if ! command -v node >/dev/null 2>&1; then
+# Upgrade Node.js to 22.x if missing or older than v20 (Vite 8 requires Node >= 20.19 / 22.12)
+if ! command -v node >/dev/null 2>&1 || [ "$(node -v | cut -d. -f1 | tr -d 'v')" -lt 22 ]; then
+    echo "Upgrading Node.js to v22 LTS..."
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
     apt-get install -y nodejs
 fi
