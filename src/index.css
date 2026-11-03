@@ -1,0 +1,84 @@
+:root {
+  --bg-outer-light: #eef0f4;
+  --bg-outer-dark: #0b0f17;
+  --bg-canvas-light: #f8f9fb;
+  --bg-canvas-dark: #111827;
+  --bg-surface-light: #ffffff;
+  --bg-surface-dark: #1f2937;
+  --bg-subtle-light: #f4f6f9;
+  --bg-subtle-dark: #273449;
+  --text-primary-light: #111827;
+  --text-primary-dark: #f9fafb;
+  --text-secondary-light: #64748b;
+  --text-secondary-dark: #94a3b8;
+  --text-muted-light: #94a3b8;
+  --text-muted-dark: #64748b;
+  --border-light: #edf0f5;
+  --border-dark: #2e3c51;
+  --brand-orange-light: #ff6b00;
+  --brand-orange-dark: #ff7a1a;
+  --nav-active-bg-light: #fff3eb;
+  --nav-active-bg-dark: #3b2313;
+
+  --bg-outer: var(--bg-outer-light);
+  --bg-canvas: var(--bg-canvas-light);
+  --bg-surface: var(--bg-surface-light);
+  --bg-subtle: var(--bg-subtle-light);
+  --text-primary: var(--text-primary-light);
+  --text-secondary: var(--text-secondary-light);
+  --text-muted: var(--text-muted-light);
+  --border-color: var(--border-light);
+  --accent-color: var(--brand-orange-light);
+  --nav-active-bg: var(--nav-active-bg-light);
+
+  /* Fallback for browsers without light-dark() support */
+  @media (prefers-color-scheme: dark) {
+    --bg-outer: var(--bg-outer-dark);
+    --bg-canvas: var(--bg-canvas-dark);
+    --bg-surface: var(--bg-surface-dark);
+    --bg-subtle: var(--bg-subtle-dark);
+    --text-primary: var(--text-primary-dark);
+    --text-secondary: var(--text-secondary-dark);
+    --text-muted: var(--text-muted-dark);
+    --border-color: var(--border-dark);
+    --accent-color: var(--brand-orange-dark);
+    --nav-active-bg: var(--nav-active-bg-dark);
+  }
+
+  @supports (color: light-dark(white, black)) {
+    --bg-outer: light-dark(var(--bg-outer-light), var(--bg-outer-dark));
+    --bg-canvas: light-dark(var(--bg-canvas-light), var(--bg-canvas-dark));
+    --bg-surface: light-dark(var(--bg-surface-light), var(--bg-surface-dark));
+    --bg-subtle: light-dark(var(--bg-subtle-light), var(--bg-subtle-dark));
+    --text-primary: light-dark(var(--text-primary-light), var(--text-primary-dark));
+    --text-secondary: light-dark(var(--text-secondary-light), var(--text-secondary-dark));
+    --text-muted: light-dark(var(--text-muted-light), var(--text-muted-dark));
+    --border-color: light-dark(var(--border-light), var(--border-dark));
+    --accent-color: light-dark(var(--brand-orange-light), var(--brand-orange-dark));
+    --nav-active-bg: light-dark(var(--nav-active-bg-light), var(--nav-active-bg-dark));
+  }
+
+  /* Match the crisp light SaaS look from the reference screenshot by default */
+  color-scheme: light;
+  accent-color: var(--accent-color);
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-outer);
+  color: var(--text-primary);
+}
+
+pre,
+code {
+  color-scheme: dark;
+  accent-color: var(--accent-color);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}

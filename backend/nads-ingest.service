@@ -1,0 +1,13 @@
+[Unit]
+Description=NADS Suricata log ingest service
+After=network.target suricata.service
+
+[Service]
+WorkingDirectory=/home/ubuntu/nads/backend
+ExecStart=/home/ubuntu/nads/backend/.venv/bin/python /home/ubuntu/nads/backend/ingest.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+

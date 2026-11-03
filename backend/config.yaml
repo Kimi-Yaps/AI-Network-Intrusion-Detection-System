@@ -1,0 +1,42 @@
+server:
+  name: "JB-Web-Server-01"
+  environment: "production"
+  listen_interface: "eth0"
+  public_ip: "203.0.113.10"
+  os: "Ubuntu 24.04 LTS"
+
+web:
+  react_app_url: "https://nads.example.com"
+  api_url: "https://nads.example.com/api"
+  allowed_origins:
+    - "https://nads.example.com"
+    - "http://localhost:5173"
+    - "http://127.0.0.1:5173"
+
+monitoring:
+  suricata_eve_path: "/var/log/suricata/eve.json"
+  zeek_log_dir: "/opt/zeek/logs/current"
+  poll_interval_seconds: 2
+
+dns_anomaly:
+  max_queries_per_client_per_minute: 120
+  max_nxdomain_ratio: 0.5
+  high_entropy_threshold: 3.5
+  suspicious_tlds:
+    - "zip"
+    - "mov"
+    - "top"
+    - "xyz"
+
+alerts:
+  email_to:
+    - "soc@example.com"
+  webhook_url: ""
+
+dataset_bucket:
+  provider: "gcs"
+  bucket_uri: "gs://nads-security-lake/hf-datasets/cicids-dns"
+  hf_dataset_id: "Mandatory/Cybersecurity-Attack-Dataset"
+  split: "train"
+  streaming: true
+
