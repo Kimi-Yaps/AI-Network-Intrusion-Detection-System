@@ -113,3 +113,4 @@ if systemctl is-active --quiet nginx; then
 fi
 
 echo "[nads-update] Website & backend updated to ${REMOTE_SHA:0:7} without deleting local files!"
+
