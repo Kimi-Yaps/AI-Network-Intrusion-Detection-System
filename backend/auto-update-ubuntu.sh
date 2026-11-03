@@ -88,6 +88,15 @@ SERVER_IP="${SERVER_IP:-127.0.0.1}"
 npm install --no-audit --no-fund
 VITE_API_URL="http://${SERVER_IP}" npm run build
 
+sudo mkdir -p /var/www/nads
+sudo rm -rf /var/www/nads/*
+sudo cp -r "${PROJECT_DIR}/dist/"* /var/www/nads/
+sudo chown -R www-data:www-data /var/www/nads
+sudo chmod -R 755 /var/www/nads
+if [ -f /etc/nginx/sites-available/nads ]; then
+    sudo sed -i "s|root .*/dist;|root /var/www/nads;|g" /etc/nginx/sites-available/nads
+fi
+
 if [ -d "${PROJECT_DIR}/backend/.venv" ]; then
     "${PROJECT_DIR}/backend/.venv/bin/pip" install -q -r "${PROJECT_DIR}/backend/requirements.txt"
 fi

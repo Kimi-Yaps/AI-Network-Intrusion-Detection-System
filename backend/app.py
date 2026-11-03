@@ -124,14 +124,27 @@ def process_suricata_event(event: dict[str, Any]) -> list[dict[str, Any]]:
 
     elif event_type == "dns":
         dns_data = event.get("dns", {})
-        src = event.get("src_ip", "unknown")
-        qname = str(dns_data.get("rrname", "")).rstrip(".")
+        is_answer = dns_data.get("type") == "answer" or event.get("src_port") == 53
+        src = (
+            event.get("dest_ip", event.get("src_ip", "unknown"))
+            if is_answer
+            else event.get("src_ip", "unknown")
+        )
+        queries_list = dns_data.get("queries")
+        first_query = (
+            queries_list[0]
+            if isinstance(queries_list, list) and len(queries_list) > 0 and isinstance(queries_list[0], dict)
+            else {}
+        )
+        raw_qname = dns_data.get("rrname") or first_query.get("rrname") or ""
+        qname = str(raw_qname).rstrip(".")
         rcode = dns_data.get("rcode")
-        rrtype = dns_data.get("rrtype", "A")
+        rrtype = str(dns_data.get("rrtype") or first_query.get("rrtype") or "A")
         now = time.time()
 
         dq = dns_counts[src]
-        dq.append(now)
+        if not is_answer:
+            dq.append(now)
         while dq and now - dq[0] > 60:
             dq.popleft()
 
@@ -140,21 +153,22 @@ def process_suricata_event(event: dict[str, Any]) -> list[dict[str, Any]]:
         entropy = round(shannon_entropy(subdomain), 2)
         tld = labels[-1].lower() if len(labels) >= 2 else ""
 
-        recent_dns_queries.appendleft(
-            {
-                "id": f"dns-{time.time_ns()}",
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                "source_ip": src,
-                "rrname": qname,
-                "rrtype": rrtype,
-                "rcode": rcode,
-                "entropy": entropy,
-                "qpm_for_client": len(dq),
-            }
-        )
+        if qname or not is_answer:
+            recent_dns_queries.appendleft(
+                {
+                    "id": f"dns-{time.time_ns()}",
+                    "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                    "source_ip": src,
+                    "rrname": qname,
+                    "rrtype": rrtype,
+                    "rcode": rcode,
+                    "entropy": entropy,
+                    "qpm_for_client": len(dq),
+                }
+            )
 
         max_qpm = config["dns_anomaly"]["max_queries_per_client_per_minute"]
-        if len(dq) > max_qpm:
+        if not is_answer and len(dq) > max_qpm:
             created_alerts.append(
                 add_alert(
                     severity="high",
@@ -189,7 +203,7 @@ def process_suricata_event(event: dict[str, Any]) -> list[dict[str, Any]]:
                     )
                 )
 
-        if len(labels) >= 3:
+        if not is_answer and len(labels) >= 3:
             if entropy > config["dns_anomaly"]["high_entropy_threshold"]:
                 created_alerts.append(
                     add_alert(
@@ -210,7 +224,7 @@ def process_suricata_event(event: dict[str, Any]) -> list[dict[str, Any]]:
             str(t).lower().lstrip(".")
             for t in config["dns_anomaly"].get("suspicious_tlds", [])
         ]
-        if tld and tld in suspicious_tlds:
+        if not is_answer and tld and tld in suspicious_tlds:
             created_alerts.append(
                 add_alert(
                     severity="medium",

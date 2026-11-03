@@ -151,12 +151,19 @@ cd "${PROJECT_DIR}"
 npm install
 VITE_API_URL="http://${SERVER_IP}" npm run build
 
+# Copy production build to /var/www/nads so Nginx (www-data) never hits /home/<user> 0750 permission 500 errors
+mkdir -p /var/www/nads
+rm -rf /var/www/nads/*
+cp -r "${PROJECT_DIR}/dist/"* /var/www/nads/
+chown -R www-data:www-data /var/www/nads
+chmod -R 755 /var/www/nads
+
 cat <<EOF >/etc/nginx/sites-available/nads
 server {
     listen 80;
     server_name _;
 
-    root ${PROJECT_DIR}/dist;
+    root /var/www/nads;
     index index.html;
 
     location / {
