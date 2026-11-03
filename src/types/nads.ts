@@ -70,6 +70,11 @@ export interface ServerStatus {
     entropy: number;
     qpm_for_client: number;
   }>;
+  metrics?: {
+    dns_queries_per_min: number;
+    nxdomain_last_5m: number;
+    max_entropy_bits: number;
+  };
 }
 
 export interface AnomalyAlert {

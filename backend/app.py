@@ -16,6 +16,10 @@ import yaml
 # Load .env from project root or backend directory
 BASE_DIR = Path(__file__).resolve().parent
 ROOT_DIR = BASE_DIR.parent
+DATA_DIR = BASE_DIR / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+ALERTS_HISTORY_FILE = DATA_DIR / "alerts_history.jsonl"
+
 load_dotenv(ROOT_DIR / ".env")
 load_dotenv(BASE_DIR / ".env")
 
@@ -42,6 +46,30 @@ alerts: deque[dict[str, Any]] = deque(maxlen=1000)
 dns_counts: dict[str, deque[float]] = defaultdict(deque)
 nxdomain_counts: dict[str, deque[float]] = defaultdict(deque)
 recent_dns_queries: deque[dict[str, Any]] = deque(maxlen=250)
+
+
+def load_persisted_alerts() -> None:
+    """Loads previously saved alerts from backend/data/alerts_history.jsonl on startup."""
+    if not ALERTS_HISTORY_FILE.exists():
+        return
+    try:
+        with open(ALERTS_HISTORY_FILE, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()[-500:]
+        for line in lines:
+            line = line.strip()
+            if line:
+                alerts.appendleft(json.loads(line))
+    except Exception:
+        pass
+
+
+def persist_alert(alert: dict[str, Any]) -> None:
+    """Appends each alert to backend/data/alerts_history.jsonl so updates never lose data."""
+    try:
+        with open(ALERTS_HISTORY_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(alert) + "\n")
+    except Exception:
+        pass
 
 
 def shannon_entropy(value: str) -> float:
@@ -71,6 +99,7 @@ def add_alert(
         "evidence": evidence,
     }
     alerts.appendleft(alert)
+    persist_alert(alert)
     return alert
 
 
@@ -194,65 +223,32 @@ def process_suricata_event(event: dict[str, Any]) -> list[dict[str, Any]]:
     return created_alerts
 
 
-def seed_initial_events() -> None:
-    """Seeds initial demonstration telemetry if no live Suricata alerts have arrived yet."""
-    if alerts:
-        return
-    sample_events = [
-        {
-            "event_type": "dns",
-            "src_ip": "10.0.14.88",
-            "dns": {
-                "rrname": "4f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c.x91k2m.c2-tunnel.net",
-                "rrtype": "TXT",
-                "rcode": 0,
-            },
-        },
-        {
-            "event_type": "dns",
-            "src_ip": "10.0.14.23",
-            "dns": {
-                "rrname": " invoice-update-auth-portal.zip",
-                "rrtype": "A",
-                "rcode": 0,
-            },
-        },
-        {
-            "event_type": "alert",
-            "src_ip": "198.51.100.42",
-            "dest_ip": config["server"]["public_ip"],
-            "proto": "TCP",
-            "alert": {
-                "signature": "ET WEB_SERVER SQL Injection Attempt in URI (UNION SELECT)",
-                "category": "Web Application Attack",
-                "severity": 1,
-            },
-        },
-        {
-            "event_type": "alert",
-            "src_ip": "192.0.2.199",
-            "dest_ip": config["server"]["public_ip"],
-            "proto": "TCP",
-            "alert": {
-                "signature": "ET SCAN Nmap Scripting Engine User-Agent Detected",
-                "category": "Attempted Information Leak",
-                "severity": 2,
-            },
-        },
-    ]
-    for ev in sample_events:
-        process_suricata_event(ev)
-
-
 async def tail_suricata_log_task() -> None:
-    """Background task that tails /var/log/suricata/eve.json when available on Ubuntu."""
+    """Background task that reads recent lines and tails /var/log/suricata/eve.json on Ubuntu."""
     eve_path = Path(config["monitoring"]["suricata_eve_path"])
     poll_interval = float(config["monitoring"].get("poll_interval_seconds", 2))
+    initial_backlog_read = False
+
     while True:
         if eve_path.exists():
             try:
                 with open(eve_path, "r", encoding="utf-8", errors="replace") as f:
-                    f.seek(0, os.SEEK_END)
+                    if not initial_backlog_read:
+                        # Read up to last 64KB of existing live Suricata events on startup
+                        f.seek(0, os.SEEK_END)
+                        size = f.tell()
+                        f.seek(max(0, size - 65536), os.SEEK_SET)
+                        if size > 65536:
+                            f.readline()  # skip partial line
+                        for line in f.readlines():
+                            try:
+                                process_suricata_event(json.loads(line))
+                            except json.JSONDecodeError:
+                                continue
+                        initial_backlog_read = True
+                    else:
+                        f.seek(0, os.SEEK_END)
+
                     while True:
                         line = f.readline()
                         if not line:
@@ -271,7 +267,7 @@ async def tail_suricata_log_task() -> None:
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    seed_initial_events()
+    load_persisted_alerts()
     task = asyncio.create_task(tail_suricata_log_task())
     yield
     task.cancel()
@@ -279,11 +275,11 @@ async def lifespan(_app: FastAPI):
 
 app = FastAPI(title="Network Anomaly Detection System", lifespan=lifespan)
 
-origins = config["web"]["allowed_origins"]
+# Allow configured origins plus any LAN/VMware IP origin
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -346,7 +342,6 @@ def get_hf_bucket_dataset(dataset: str | None = None, limit: int = 5):
     }
 
 
-
 @app.put("/api/config/dns_anomaly")
 def update_dns_anomaly_config(update: DnsAnomalyConfigUpdate):
     global config
@@ -360,7 +355,6 @@ def update_dns_anomaly_config(update: DnsAnomalyConfigUpdate):
         with open(active_config_path, "w", encoding="utf-8") as f:
             yaml.safe_dump(config, f, sort_keys=False)
     except OSError:
-        # Still update in-memory if /etc/nads/config.yaml is read-only
         pass
     return {"status": "updated", "dns_anomaly": config["dns_anomaly"]}
 
@@ -372,13 +366,22 @@ def status():
     zeek_dns = zeek_dir / "dns.log"
     now = time.time()
 
-    # Prune stale 60s windows before reporting client metrics
     active_clients = {}
+    total_qpm = 0
     for client_ip, dq in list(dns_counts.items()):
         while dq and now - dq[0] > 60:
             dq.popleft()
         if dq:
             active_clients[client_ip] = len(dq)
+            total_qpm += len(dq)
+
+    total_nx_5m = 0
+    for _ip, nx in list(nxdomain_counts.items()):
+        while nx and now - nx[0] > 300:
+            nx.popleft()
+        total_nx_5m += len(nx)
+
+    max_entropy = max((q.get("entropy", 0.0) for q in recent_dns_queries), default=0.0)
 
     return {
         "server_name": config["server"]["name"],
@@ -392,12 +395,25 @@ def status():
         "tracked_dns_clients": len(dns_counts),
         "client_query_rates": active_clients,
         "recent_dns_queries": list(recent_dns_queries)[:25],
+        "metrics": {
+            "dns_queries_per_min": total_qpm,
+            "nxdomain_last_5m": total_nx_5m,
+            "max_entropy_bits": round(max_entropy, 2),
+        },
     }
 
 
 @app.get("/api/alerts")
 def get_alerts(limit: int = 100):
     return list(alerts)[:limit]
+
+
+@app.delete("/api/alerts")
+def clear_alerts():
+    alerts.clear()
+    if ALERTS_HISTORY_FILE.exists():
+        ALERTS_HISTORY_FILE.unlink(missing_ok=True)
+    return {"cleared": True}
 
 
 @app.post("/api/events")

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # NADS Safe Auto-Updater for Ubuntu Server
-# Pulls latest website & backend updates from GitHub WITHOUT deleting .env
-# or any local server files, then rebuilds React and restarts NADS services.
+# Uses 'git pull --rebase --autostash' + persistent backend/data/ directory so
+# updating code NEVER deletes .env, alert history, or any local server files.
 #
 # Usage:
 #   bash backend/auto-update-ubuntu.sh
@@ -15,9 +15,9 @@ cd "${PROJECT_DIR}"
 
 BRANCH="${NADS_GIT_BRANCH:-$(git rev-parse --abbrev-ref HEAD)}"
 BACKUP_DIR="/tmp/nads-local-backup"
-mkdir -p "${BACKUP_DIR}"
+mkdir -p "${BACKUP_DIR}" "${PROJECT_DIR}/backend/data"
 
-# 1. Always preserve local .env so git never deletes it
+# 1. Always preserve local .env
 if [ -f "${PROJECT_DIR}/.env" ]; then
     cp -a "${PROJECT_DIR}/.env" "${BACKUP_DIR}/.env.bak"
 fi
@@ -63,7 +63,6 @@ LOCAL_SHA="$(git rev-parse HEAD)"
 REMOTE_SHA="$(git rev-parse "origin/${BRANCH}")"
 
 if [ "${LOCAL_SHA}" = "${REMOTE_SHA}" ]; then
-    # Restore .env if needed and exit quietly when already up-to-date
     if [ -f "${BACKUP_DIR}/.env.bak" ] && [ ! -f "${PROJECT_DIR}/.env" ]; then
         cp -a "${BACKUP_DIR}/.env.bak" "${PROJECT_DIR}/.env"
     fi
@@ -71,29 +70,17 @@ if [ "${LOCAL_SHA}" = "${REMOTE_SHA}" ]; then
     exit 0
 fi
 
-echo "[nads-update] New update detected (${LOCAL_SHA:0:7} -> ${REMOTE_SHA:0:7}). Updating safely..."
+echo "[nads-update] Updating (${LOCAL_SHA:0:7} -> ${REMOTE_SHA:0:7}) with --autostash (preserving all local files)..."
 
-# 4. Stash any local modifications (without touching untracked files)
-STASHED=0
-if ! git diff --quiet || ! git diff --cached --quiet; then
-    git stash push -m "nads-auto-update-$(date +%s)" --quiet || true
-    STASHED=1
-fi
+# 4. Pull with --autostash so local changes & untracked files are never deleted
+git pull --rebase --autostash origin "${BRANCH}"
 
-# 5. Update tracked files to match remote branch (never runs git clean, so untracked files stay safe)
-git reset --hard "origin/${BRANCH}"
-
-# 6. Re-apply stashed local edits if any
-if [ "${STASHED}" -eq 1 ]; then
-    git stash pop --quiet || echo "[nads-update] Note: local edits kept in 'git stash list'"
-fi
-
-# 7. Restore .env if git removed it during transition from old commit
-if [ -f "${BACKUP_DIR}/.env.bak" ]; then
+# 5. Ensure .env is always present
+if [ -f "${BACKUP_DIR}/.env.bak" ] && [ ! -f "${PROJECT_DIR}/.env" ]; then
     cp -a "${BACKUP_DIR}/.env.bak" "${PROJECT_DIR}/.env"
 fi
 
-# 8. Rebuild React website and restart backend service
+# 6. Rebuild React website and restart backend service
 IFACE="$(ip route | awk '/default/ {print $5; exit}')"
 SERVER_IP="$(ip -4 addr show "${IFACE:-ens33}" 2>/dev/null | awk '/inet / {split($2,a,"/"); print a[1]; exit}')"
 SERVER_IP="${SERVER_IP:-127.0.0.1}"
@@ -112,5 +99,4 @@ if systemctl is-active --quiet nginx; then
     sudo systemctl reload nginx
 fi
 
-echo "[nads-update] Website & backend updated to ${REMOTE_SHA:0:7} without deleting local files!"
-
+echo "[nads-update] Website & backend updated to ${REMOTE_SHA:0:7} with all local files intact!"
