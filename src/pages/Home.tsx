@@ -15,23 +15,37 @@ import type {
   ServerStatus,
 } from '../types/nads';
 
-const PRIMARY_API = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-const SECONDARY_API = 'http://localhost:3001';
+function getApiCandidates(): string[] {
+  const list: string[] = [];
+  if (import.meta.env.VITE_API_URL) {
+    list.push(String(import.meta.env.VITE_API_URL).replace(/\/$/, ''));
+  }
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname;
+    if (host && host !== 'localhost' && host !== '127.0.0.1') {
+      list.push(`http://${host}:8000`);
+      list.push(window.location.origin);
+    }
+  }
+  list.push('http://192.168.150.129:8000');
+  list.push('http://localhost:8000');
+  return Array.from(new Set(list));
+}
 
-const DEFAULT_CONFIG: ServerConfig = {
+const INITIAL_CONFIG: ServerConfig = {
   config_path: '/etc/nads/config.yaml',
   using_system_etc_config: false,
   server: {
-    name: 'JB-Web-Server-01',
+    name: 'Connecting...',
     environment: 'production',
-    listen_interface: 'eth0',
-    public_ip: '203.0.113.10',
+    listen_interface: 'ens33',
+    public_ip: '192.168.150.129',
     os: 'Ubuntu 24.04 LTS',
   },
   web: {
-    react_app_url: 'https://nads.example.com',
-    api_url: 'https://nads.example.com/api',
-    allowed_origins: ['https://nads.example.com', 'http://localhost:5173'],
+    react_app_url: 'http://192.168.150.129',
+    api_url: 'http://192.168.150.129:8000/api',
+    allowed_origins: ['http://192.168.150.129', 'http://localhost:5173'],
   },
   monitoring: {
     suricata_eve_path: '/var/log/suricata/eve.json',
@@ -49,56 +63,13 @@ const DEFAULT_CONFIG: ServerConfig = {
     webhook_configured: false,
   },
   dataset_bucket: {
-    provider: 'gcs',
-    bucket_uri: 'gs://nads-security-lake/hf-datasets/cicids-dns',
+    provider: 'huggingface-s3',
+    bucket_uri: 's3://MyBucket/example.txt',
     hf_dataset_id: 'Mandatory/Cybersecurity-Attack-Dataset',
     split: 'train',
     streaming: true,
   },
 };
-
-const DEFAULT_ALERTS: AnomalyAlert[] = [
-  {
-    id: 'seed-1',
-    timestamp: new Date().toISOString(),
-    severity: 'high',
-    category: 'Possible DNS tunneling',
-    source_ip: '10.0.14.88',
-    summary:
-      'High-entropy DNS label (3.96 bits): 4f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c.x91k2m.c2-tunnel.net',
-    evidence: {
-      entropy: 3.96,
-      query: '4f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c.x91k2m.c2-tunnel.net',
-      rrtype: 'TXT',
-    },
-  },
-  {
-    id: 'seed-2',
-    timestamp: new Date(Date.now() - 45000).toISOString(),
-    severity: 'high',
-    category: 'IDS signature',
-    source_ip: '198.51.100.42',
-    summary: 'ET WEB_SERVER SQL Injection Attempt in URI (UNION SELECT)',
-    evidence: {
-      proto: 'TCP',
-      dest_ip: '203.0.113.10',
-      signature_severity: 1,
-    },
-  },
-  {
-    id: 'seed-3',
-    timestamp: new Date(Date.now() - 95000).toISOString(),
-    severity: 'medium',
-    category: 'Suspicious TLD',
-    source_ip: '10.0.14.23',
-    summary: 'Query to monitored suspicious TLD (.zip): invoice-update-auth-portal.zip',
-    evidence: {
-      tld: 'zip',
-      query: 'invoice-update-auth-portal.zip',
-      rrtype: 'A',
-    },
-  },
-];
 
 const SECTION_TITLES: Record<NavSectionId, string> = {
   dashboard: 'Dashboard',
@@ -113,44 +84,38 @@ const SECTION_TITLES: Record<NavSectionId, string> = {
 };
 
 function Home() {
-  const [activeApi, setActiveApi] = useState<string>(PRIMARY_API);
+  const [activeApi, setActiveApi] = useState<string>('http://192.168.150.129:8000');
   const [connected, setConnected] = useState<boolean>(false);
   const [activeSection, setActiveSection] = useState<NavSectionId>('dashboard');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
-  const [config, setConfig] = useState<ServerConfig>(DEFAULT_CONFIG);
+  const [config, setConfig] = useState<ServerConfig>(INITIAL_CONFIG);
   const [status, setStatus] = useState<ServerStatus>({
-    server_name: DEFAULT_CONFIG.server.name,
-    environment: DEFAULT_CONFIG.server.environment,
-    public_ip: DEFAULT_CONFIG.server.public_ip,
-    interface: DEFAULT_CONFIG.server.listen_interface,
-    config_path: DEFAULT_CONFIG.config_path,
+    server_name: INITIAL_CONFIG.server.name,
+    environment: INITIAL_CONFIG.server.environment,
+    public_ip: INITIAL_CONFIG.server.public_ip,
+    interface: INITIAL_CONFIG.server.listen_interface,
+    config_path: INITIAL_CONFIG.config_path,
     suricata_log_exists: false,
     zeek_dns_log_exists: false,
-    active_alerts: DEFAULT_ALERTS.length,
-    tracked_dns_clients: 3,
-    client_query_rates: { '10.0.14.88': 94, '198.51.100.42': 61, '10.0.14.23': 38 },
+    active_alerts: 0,
+    tracked_dns_clients: 0,
+    client_query_rates: {},
+    recent_dns_queries: [],
+    metrics: {
+      dns_queries_per_min: 0,
+      nxdomain_last_5m: 0,
+      max_entropy_bits: 0,
+      history: [],
+    },
   });
-  const [alerts, setAlerts] = useState<AnomalyAlert[]>(DEFAULT_ALERTS);
+  const [alerts, setAlerts] = useState<AnomalyAlert[]>([]);
   const [datasetInfo, setDatasetInfo] = useState<LangChainDatasetPayload>({
-    bucket_uri: 'gs://nads-security-lake/hf-datasets/cicids-dns',
-    provider: 'gcs',
+    bucket_uri: 's3://MyBucket/example.txt',
+    provider: 'huggingface-s3',
     hf_dataset_id: 'Mandatory/Cybersecurity-Attack-Dataset',
-    document_count: 3,
-    documents: [
-      {
-        page_content: JSON.stringify({
-          attack_type: 'DNS Tunneling (Iodine / DNScat2)',
-          indicator: 'Subdomain Shannon entropy > 3.8 bits, TXT/NULL flood',
-          mitigation: 'Inspect host egress on UDP/53, block C2 domain in resolver',
-        }),
-        metadata: {
-          dataset: 'Mandatory/Cybersecurity-Attack-Dataset',
-          bucket_uri: 'gs://nads-security-lake/hf-datasets/cicids-dns',
-          row_idx: 0,
-        },
-      },
-    ],
+    document_count: 0,
+    documents: [],
   });
 
   // Editable DNS threshold state
@@ -159,6 +124,7 @@ function Home() {
   const [entropyThreshold, setEntropyThreshold] = useState<number>(3.5);
   const [tldsInput, setTldsInput] = useState<string>('zip, mov, top, xyz');
   const [configSaveMsg, setConfigSaveMsg] = useState<string>('');
+  const [configLoadedOnce, setConfigLoadedOnce] = useState<boolean>(false);
 
   // AI Analyst state
   const [selectedAlert, setSelectedAlert] = useState<AnomalyAlert | null>(null);
@@ -167,7 +133,7 @@ function Home() {
   const [analyzing, setAnalyzing] = useState<boolean>(false);
 
   const loadTelemetry = useCallback(async () => {
-    const candidates = [PRIMARY_API, SECONDARY_API];
+    const candidates = getApiCandidates();
     for (const base of candidates) {
       try {
         const [cRes, sRes, aRes, dRes] = await Promise.all([
@@ -188,10 +154,13 @@ function Home() {
           if (dRes.ok) {
             setDatasetInfo(await dRes.json());
           }
-          setMaxQpm(cData.dns_anomaly.max_queries_per_client_per_minute);
-          setMaxNxRatio(cData.dns_anomaly.max_nxdomain_ratio);
-          setEntropyThreshold(cData.dns_anomaly.high_entropy_threshold);
-          setTldsInput((cData.dns_anomaly.suspicious_tlds || []).join(', '));
+          if (!configLoadedOnce) {
+            setMaxQpm(cData.dns_anomaly.max_queries_per_client_per_minute);
+            setMaxNxRatio(cData.dns_anomaly.max_nxdomain_ratio);
+            setEntropyThreshold(cData.dns_anomaly.high_entropy_threshold);
+            setTldsInput((cData.dns_anomaly.suspicious_tlds || []).join(', '));
+            setConfigLoadedOnce(true);
+          }
           setActiveApi(base);
           setConnected(true);
           return;
@@ -201,7 +170,7 @@ function Home() {
       }
     }
     setConnected(false);
-  }, []);
+  }, [configLoadedOnce]);
 
   useEffect(() => {
     const initial = setTimeout(() => {
@@ -209,85 +178,47 @@ function Home() {
     }, 0);
     const timer = setInterval(() => {
       void loadTelemetry();
-    }, 5000);
+    }, 2000);
     return () => {
       clearTimeout(initial);
       clearInterval(timer);
     };
   }, [loadTelemetry]);
 
-  const triggerSimulation = async (scenario: string) => {
-    if (connected) {
-      try {
-        await fetch(`${activeApi}/api/simulate`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ scenario }),
-        });
-        await loadTelemetry();
-        return;
-      } catch {
-        // fall through to local simulation
-      }
+  useEffect(() => {
+    if (!connected) return;
+    const wsUrl = `${activeApi.replace(/^http/, 'ws')}/ws/alerts`;
+    let ws: WebSocket | null = null;
+    try {
+      ws = new WebSocket(wsUrl);
+      ws.onmessage = (ev) => {
+        try {
+          const incoming = JSON.parse(ev.data) as AnomalyAlert;
+          setAlerts((prev) =>
+            prev.some((a) => a.id === incoming.id) ? prev : [incoming, ...prev]
+          );
+        } catch {
+          // ignore malformed ws frame
+        }
+      };
+    } catch {
+      // polling already active every 2s
     }
-
-    const nowIso = new Date().toISOString();
-    const simulatedMap: Record<string, AnomalyAlert> = {
-      dns_tunneling: {
-        id: `sim-${Date.now()}`,
-        timestamp: nowIso,
-        severity: 'high',
-        category: 'Possible DNS tunneling',
-        source_ip: '10.0.14.88',
-        summary:
-          'High-entropy DNS label (4.02 bits): a9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4.k8z9q1w2e3r4.exfil-c2.org',
-        evidence: {
-          entropy: 4.02,
-          rrtype: 'TXT',
-          query: 'a9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4.k8z9q1w2e3r4.exfil-c2.org',
-        },
-      },
-      dga_nxdomain: {
-        id: `sim-${Date.now()}`,
-        timestamp: nowIso,
-        severity: 'medium',
-        category: 'Possible DGA',
-        source_ip: '10.0.14.105',
-        summary: 'Repeated NXDOMAIN responses from 10.0.14.105 (21 in 5m)',
-        evidence: { recent_nxdomain: 21, nxdomain_ratio: 0.84, query: 'q20x8k9m2v7p4n20.biz' },
-      },
-      dns_flood: {
-        id: `sim-${Date.now()}`,
-        timestamp: nowIso,
-        severity: 'high',
-        category: 'DNS volume',
-        source_ip: '10.0.14.210',
-        summary: `High DNS query volume: ${maxQpm + 18} queries/minute (threshold: ${maxQpm})`,
-        evidence: { queries_per_minute: maxQpm + 18, query: 'api-lookup.internal.example.com' },
-      },
-      suspicious_tld: {
-        id: `sim-${Date.now()}`,
-        timestamp: nowIso,
-        severity: 'medium',
-        category: 'Suspicious TLD',
-        source_ip: '10.0.14.54',
-        summary: 'Query to monitored suspicious TLD (.xyz): credential-harvest-login.xyz',
-        evidence: { tld: 'xyz', query: 'credential-harvest-login.xyz' },
-      },
-      web_attack: {
-        id: `sim-${Date.now()}`,
-        timestamp: nowIso,
-        severity: 'high',
-        category: 'IDS signature',
-        source_ip: '203.0.113.244',
-        summary: 'ET WEB_SERVER Possible CVE-2024 Remote Command Execution Attempt',
-        evidence: { proto: 'TCP', dest_ip: config.server.public_ip, severity: 1 },
-      },
+    return () => {
+      ws?.close();
     };
-    const nextAlert = simulatedMap[scenario];
-    if (nextAlert) {
-      setAlerts((prev) => [nextAlert, ...prev]);
-      setStatus((prev) => ({ ...prev, active_alerts: prev.active_alerts + 1 }));
+  }, [activeApi, connected]);
+
+  const triggerSimulation = async (scenario: string) => {
+    try {
+      await fetch(`${activeApi}/api/simulate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scenario }),
+      });
+      await loadTelemetry();
+    } catch {
+      // ignore if backend unreachable
     }
   };
 
@@ -304,24 +235,20 @@ function Home() {
       suspicious_tlds: updatedTlds,
     };
 
-    if (connected) {
-      try {
-        const res = await fetch(`${activeApi}/api/config/dns_anomaly`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload),
-        });
-        if (res.ok) {
-          setConfigSaveMsg('Saved to backend server configuration.');
-          await loadTelemetry();
-          return;
-        }
-      } catch {
-        // fallback below
+    try {
+      const res = await fetch(`${activeApi}/api/config/dns_anomaly`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) {
+        setConfigSaveMsg('Saved to backend server configuration.');
+        await loadTelemetry();
+        return;
       }
+    } catch {
+      setConfigSaveMsg('Failed to reach backend API.');
     }
-    setConfig((prev) => ({ ...prev, dns_anomaly: payload }));
-    setConfigSaveMsg('Updated local session configuration.');
   };
 
   const analyzeWithAi = async (alertToInspect?: AnomalyAlert) => {
@@ -333,41 +260,24 @@ function Home() {
     setAnalyzing(true);
     setAiAnalysis('');
 
-    if (connected) {
-      try {
-        const res = await fetch(`${activeApi}/api/analyze`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            alert_id: target?.id,
-            prompt:
-              customPrompt.trim() ||
-              `Analyze this ${target?.category} alert from ${target?.source_ip} (${target?.summary}) correlated with our Hugging Face bucket dataset and provide Ubuntu/Suricata/Zeek mitigation steps.`,
-          }),
-        });
-        const data = await res.json();
-        setAiAnalysis(data.text || data.detail || data.error || 'No analysis returned.');
-        setAnalyzing(false);
-        return;
-      } catch {
-        // fallback explanation if backend is offline
-      }
+    try {
+      const res = await fetch(`${activeApi}/api/analyze`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          alert_id: target?.id,
+          prompt:
+            customPrompt.trim() ||
+            `Analyze this ${target?.category || 'network'} alert from ${target?.source_ip || 'host'} (${target?.summary || 'live telemetry'}) correlated with our Hugging Face bucket dataset and provide Ubuntu/Suricata/Zeek mitigation steps.`,
+        }),
+      });
+      const data = await res.json();
+      setAiAnalysis(data.text || data.detail || data.error || 'No analysis returned.');
+    } catch {
+      setAiAnalysis('Backend API unreachable. Ensure nads-api or npm run server is running on port 8000.');
+    } finally {
+      setAnalyzing(false);
     }
-
-    setAiAnalysis(
-      `[Offline SOC Triage — Start backend on port 8000 for live Gemini 3.8 Flash + LangChain analysis]\n\n` +
-      `Target Alert: ${target?.category} (${target?.severity.toUpperCase()})\n` +
-      `Source IP: ${target?.source_ip}\n` +
-      `Summary: ${target?.summary}\n\n` +
-      `Recommended Ubuntu Verification Commands:\n` +
-      `1. Inspect Suricata EVE JSON:\n` +
-      `   sudo jq 'select(.src_ip=="${target?.source_ip}")' ${config.monitoring.suricata_eve_path}\n` +
-      `2. Inspect Zeek DNS Log:\n` +
-      `   cat ${config.monitoring.zeek_log_dir}/dns.log | zeek-cut ts id.orig_h query qtype_name rcode_name | grep "${target?.source_ip}"\n` +
-      `3. Block or Rate-Limit Offending Host via UFW:\n` +
-      `   sudo ufw insert 1 deny from ${target?.source_ip} to any`
-    );
-    setAnalyzing(false);
   };
 
   const filteredAlerts = useMemo(() => {
@@ -381,11 +291,16 @@ function Home() {
     );
   }, [alerts, searchQuery]);
 
+  const liveQpm = status.metrics?.dns_queries_per_min ?? 0;
+  const liveNx = status.metrics?.nxdomain_last_5m ?? 0;
+  const liveEntropy = status.metrics?.max_entropy_bits ?? 0;
+  const liveHistory = status.metrics?.history ?? [];
+
   const kpiCards: KpiCardProps[] = [
     {
-      label: 'DNS Queries',
-      value: '1,039/m',
-      trendValue: '20%',
+      label: 'DNS Queries (1m)',
+      value: `${liveQpm}/m`,
+      trendValue: `${status.tracked_dns_clients} clients`,
       trendDirection: 'up',
       trendLabel: `limit ${config.dns_anomaly.max_queries_per_client_per_minute}/m`,
       color: 'blue',
@@ -393,28 +308,29 @@ function Home() {
       onActionClick: () => setActiveSection('dns'),
     },
     {
-      label: 'NXDOMAIN / DGA',
-      value: '21h',
-      trendValue: '10%',
-      trendDirection: 'down',
+      label: 'NXDOMAIN (5m)',
+      value: `${liveNx}`,
+      trendValue: liveNx >= 20 ? 'DGA Risk' : 'Normal',
+      trendDirection: liveNx >= 20 ? 'up' : 'down',
       trendLabel: `max ratio ${config.dns_anomaly.max_nxdomain_ratio}`,
       color: 'yellow',
       iconSymbol: '⚑',
-      onActionClick: () => triggerSimulation('dga_nxdomain'),
+      onActionClick: () => void triggerSimulation('dga_nxdomain'),
     },
     {
-      label: 'Entropy Ratio',
-      value: '40%',
-      trendValue: '20%',
+      label: 'Peak Entropy',
+      value: `${liveEntropy} bits`,
+      trendValue:
+        liveEntropy > config.dns_anomaly.high_entropy_threshold ? 'High Entropy' : 'Normal',
       trendDirection: 'up',
       trendLabel: `threshold ${config.dns_anomaly.high_entropy_threshold}b`,
       color: 'orange',
       iconSymbol: '⚡',
-      onActionClick: () => triggerSimulation('dns_tunneling'),
+      onActionClick: () => void triggerSimulation('dns_tunneling'),
     },
     {
       label: 'Active Alerts',
-      value: `${alerts.length} Alerts`,
+      value: `${alerts.length}`,
       trendValue: `${alerts.filter((a) => a.severity === 'high').length} high`,
       trendDirection: 'up',
       trendLabel: `on ${status.interface}`,
@@ -424,18 +340,16 @@ function Home() {
     },
   ];
 
-  const topSourceIpItems: EntityRowItem[] = useMemo(() => {
-    const palette = ['#ff6b00', '#2563eb', '#10b981', '#8b5cf6'];
-    return filteredAlerts.slice(0, 4).map((alert, idx) => ({
-      id: `src-${alert.id}`,
-      initials: alert.source_ip.split('.').slice(-1)[0] || 'IP',
-      badgeColor: palette[idx % palette.length],
-      primaryText: alert.source_ip,
-      secondaryText: alert.category,
-      metricText: alert.severity.toUpperCase(),
-      onClick: () => void analyzeWithAi(alert),
-    }));
-  }, [filteredAlerts]);
+  const palette = ['#ff6b00', '#2563eb', '#10b981', '#8b5cf6'];
+  const topSourceIpItems: EntityRowItem[] = filteredAlerts.slice(0, 4).map((alert, idx) => ({
+    id: `src-${alert.id}`,
+    initials: alert.source_ip.split('.').slice(-1)[0] || 'IP',
+    badgeColor: palette[idx % palette.length],
+    primaryText: alert.source_ip,
+    secondaryText: alert.category,
+    metricText: alert.severity.toUpperCase(),
+    onClick: () => void analyzeWithAi(alert),
+  }));
 
   const topSensorDepartments: EntityRowItem[] = [
     {
@@ -444,7 +358,7 @@ function Home() {
       badgeColor: '#ff6b00',
       primaryText: 'Suricata EVE Sensor',
       secondaryText: config.monitoring.suricata_eve_path,
-      metricText: status.suricata_log_exists ? 'LIVE' : 'SIMULATED',
+      metricText: status.suricata_log_exists ? 'LIVE' : 'WAITING',
       onClick: () => setActiveSection('monitoring'),
     },
     {
@@ -499,7 +413,6 @@ function Home() {
             onOpenSettings={() => setActiveSection('configure')}
           />
 
-          {/* 4 Reusable KPI Cards Row */}
           <section className="tm-kpi-row" aria-label="Key Security Metrics">
             {kpiCards.map((card) => (
               <KpiCard key={card.label} {...card} />
@@ -509,16 +422,17 @@ function Home() {
           {activeSection === 'dashboard' && (
             <>
               <OverviewChart
-                totalDnsQueries="1,039/m"
-                nxdomainCount="21 NX"
-                entropyRate="3.96 bits"
-                alertScore={`${alerts.length} Alerts`}
+                history={liveHistory}
+                totalDnsQueries={`${liveQpm}/m`}
+                nxdomainCount={`${liveNx}`}
+                entropyRate={`${liveEntropy}b`}
+                alertScore={`${alerts.length}`}
               />
 
               <div className="tm-bottom-grid">
                 <EntityListCard
                   title="Top Source IPs"
-                  filterLabel="By threat severity"
+                  filterLabel="Live alert sources"
                   items={topSourceIpItems}
                   actionLabel="Triage"
                 />
@@ -532,8 +446,8 @@ function Home() {
               </div>
 
               <AlertsTable
-                title="Recent Network & DNS Anomalies"
-                caption={`Live telemetry ingested for ${status.server_name} (${config.server.public_ip})`}
+                title="Live Network & DNS Anomalies"
+                caption={`Live telemetry ingested from ${status.server_name} (${config.server.public_ip})`}
                 alerts={filteredAlerts}
                 analyzing={analyzing}
                 onAnalyzeAlert={(a) => void analyzeWithAi(a)}
@@ -566,80 +480,80 @@ function Home() {
           {(activeSection === 'configure' ||
             activeSection === 'monitoring' ||
             activeSection === 'system') && (
-              <div className="tm-bottom-grid">
-                <section className="dashboard-section" style={{ marginBottom: 0 }}>
-                  <div className="tm-card-header">
-                    <h2 className="tm-card-title">
-                      Server Configuration ({config.config_path || '/etc/nads/config.yaml'})
-                    </h2>
-                  </div>
-                  <pre className="code-panel">{JSON.stringify(config, null, 2)}</pre>
-                </section>
+            <div className="tm-bottom-grid">
+              <section className="dashboard-section" style={{ marginBottom: 0 }}>
+                <div className="tm-card-header">
+                  <h2 className="tm-card-title">
+                    Server Configuration ({config.config_path || '/etc/nads/config.yaml'})
+                  </h2>
+                </div>
+                <pre className="code-panel">{JSON.stringify(config, null, 2)}</pre>
+              </section>
 
-                <section className="dashboard-section" style={{ marginBottom: 0 }}>
-                  <div className="tm-card-header">
-                    <h2 className="tm-card-title">Tune DNS Anomaly Thresholds</h2>
-                  </div>
-                  <div className="config-form-grid">
-                    <label>
-                      Max Queries / Client / Minute
-                      <input
-                        type="number"
-                        value={maxQpm}
-                        onChange={(e) => setMaxQpm(Number(e.target.value))}
-                      />
-                    </label>
-                    <label>
-                      Max NXDOMAIN Ratio (0.0 - 1.0)
-                      <input
-                        type="number"
-                        step="0.05"
-                        value={maxNxRatio}
-                        onChange={(e) => setMaxNxRatio(Number(e.target.value))}
-                      />
-                    </label>
-                    <label>
-                      Shannon Entropy Threshold (bits)
-                      <input
-                        type="number"
-                        step="0.1"
-                        value={entropyThreshold}
-                        onChange={(e) => setEntropyThreshold(Number(e.target.value))}
-                      />
-                    </label>
-                    <label>
-                      Suspicious TLDs (comma-separated)
-                      <input
-                        type="text"
-                        value={tldsInput}
-                        onChange={(e) => setTldsInput(e.target.value)}
-                      />
-                    </label>
-                  </div>
-                  <div
-                    style={{
-                      marginTop: '1rem',
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: '0.75rem',
-                    }}
+              <section className="dashboard-section" style={{ marginBottom: 0 }}>
+                <div className="tm-card-header">
+                  <h2 className="tm-card-title">Tune DNS Anomaly Thresholds</h2>
+                </div>
+                <div className="config-form-grid">
+                  <label>
+                    Max Queries / Client / Minute
+                    <input
+                      type="number"
+                      value={maxQpm}
+                      onChange={(e) => setMaxQpm(Number(e.target.value))}
+                    />
+                  </label>
+                  <label>
+                    Max NXDOMAIN Ratio (0.0 - 1.0)
+                    <input
+                      type="number"
+                      step="0.05"
+                      value={maxNxRatio}
+                      onChange={(e) => setMaxNxRatio(Number(e.target.value))}
+                    />
+                  </label>
+                  <label>
+                    Shannon Entropy Threshold (bits)
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={entropyThreshold}
+                      onChange={(e) => setEntropyThreshold(Number(e.target.value))}
+                    />
+                  </label>
+                  <label>
+                    Suspicious TLDs (comma-separated)
+                    <input
+                      type="text"
+                      value={tldsInput}
+                      onChange={(e) => setTldsInput(e.target.value)}
+                    />
+                  </label>
+                </div>
+                <div
+                  style={{
+                    marginTop: '1rem',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.75rem',
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="action-btn primary"
+                    onClick={() => void handleSaveDnsConfig()}
                   >
-                    <button
-                      type="button"
-                      className="action-btn primary"
-                      onClick={() => void handleSaveDnsConfig()}
-                    >
-                      Save to Server Config
-                    </button>
-                    {configSaveMsg && (
-                      <span style={{ fontSize: '0.82rem', color: '#10b981', fontWeight: 600 }}>
-                        {configSaveMsg}
-                      </span>
-                    )}
-                  </div>
-                </section>
-              </div>
-            )}
+                    Save to Server Config
+                  </button>
+                  {configSaveMsg && (
+                    <span style={{ fontSize: '0.82rem', color: '#10b981', fontWeight: 600 }}>
+                      {configSaveMsg}
+                    </span>
+                  )}
+                </div>
+              </section>
+            </div>
+          )}
 
           {activeSection === 'rules' && (
             <section className="dashboard-section">
@@ -811,7 +725,13 @@ function Home() {
                   </h2>
                   <span className="tm-pill-select">{datasetInfo.bucket_uri}</span>
                 </div>
-                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: '0 0 0.5rem' }}>
+                <p
+                  style={{
+                    fontSize: '0.8rem',
+                    color: 'var(--text-muted)',
+                    margin: '0 0 0.5rem',
+                  }}
+                >
                   Source:{' '}
                   <strong
                     style={{
@@ -830,9 +750,7 @@ function Home() {
 
               <section className="dashboard-section" style={{ marginBottom: 0 }}>
                 <div className="tm-card-header">
-                  <h2 className="tm-card-title">
-                    Bucket Access (src/lib/hfBucket.ts)
-                  </h2>
+                  <h2 className="tm-card-title">Bucket Access (src/lib/hfBucket.ts)</h2>
                 </div>
                 <pre className="code-panel">{`import { S3Client, GetObjectCommand } from "@aws-sdk/client-s3";
 import { FetchHttpHandler } from "@smithy/fetch-http-handler";
@@ -849,16 +767,7 @@ const s3 = new S3Client({
     accessKeyId: process.env.AWS_ACCESS_KEY_ID ?? process.env.HUGGINGFACE_API_KEY,
     secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY ?? process.env.HUGGINGFACE_API_KEY,
   },
-});
-
-const obj = await s3.send(new GetObjectCommand({
-  Bucket: process.env.HF_S3_BUCKET,
-  Key: process.env.HF_S3_KEY,
-}));
-const text = await obj.Body.transformToString();
-
-// .jsonl/.json/.csv -> one Document per row, otherwise text chunks
-const docs = textToDocuments(text, key, settings);`}</pre>
+});`}</pre>
               </section>
             </div>
           )}

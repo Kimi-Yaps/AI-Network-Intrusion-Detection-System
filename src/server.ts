@@ -6,6 +6,7 @@ import cors from 'cors';
 import { GoogleGenAI } from '@google/genai';
 import { Document } from '@langchain/core/documents';
 import {
+  describeBucketError,
   getHfBucketSettings,
   hasHfBucketCredentials,
   listHfBucketObjects,
@@ -18,26 +19,31 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Simple YAML parser for /etc/nads/config.yaml or backend/config.yaml without extra deps
 function loadServerConfig() {
   const systemPath = process.env.NADS_CONFIG_PATH || '/etc/nads/config.yaml';
   const localPath = path.resolve(process.cwd(), 'backend', 'config.yaml');
   const activePath = fs.existsSync(systemPath) ? systemPath : localPath;
 
-  const defaultConfig = {
+  return {
     config_path: activePath,
     using_system_etc_config: activePath === systemPath && fs.existsSync(systemPath),
     server: {
       name: 'JB-Web-Server-01',
       environment: 'production',
-      listen_interface: 'eth0',
-      public_ip: '203.0.113.10',
+      listen_interface: 'ens33',
+      public_ip: '192.168.150.129',
       os: 'Ubuntu 24.04 LTS',
     },
     web: {
-      react_app_url: 'https://nads.example.com',
-      api_url: 'https://nads.example.com/api',
-      allowed_origins: ['https://nads.example.com', 'http://localhost:5173'],
+      react_app_url: 'http://192.168.150.129',
+      api_url: 'http://192.168.150.129/api',
+      allowed_origins: [
+        'https://nads.example.com',
+        'http://localhost:5173',
+        'http://127.0.0.1:5173',
+        'http://192.168.150.129',
+        'http://192.168.150.129:5173',
+      ],
     },
     monitoring: {
       suricata_eve_path: '/var/log/suricata/eve.json',
@@ -63,8 +69,6 @@ function loadServerConfig() {
       streaming: true,
     },
   };
-
-  return defaultConfig;
 }
 
 const config = loadServerConfig();
@@ -90,10 +94,19 @@ interface DnsQueryRecord {
   qpm_for_client: number;
 }
 
+interface TelemetryPoint {
+  timestamp: string;
+  qpm: number;
+  nxdomain: number;
+  entropy: number;
+  alerts: number;
+}
+
 const alerts: AlertItem[] = [];
 const dnsCounts = new Map<string, number[]>();
 const nxdomainCounts = new Map<string, number[]>();
 const recentDnsQueries: DnsQueryRecord[] = [];
+const telemetryHistory: TelemetryPoint[] = [];
 
 function shannonEntropy(value: string): number {
   if (!value) return 0;
@@ -238,49 +251,42 @@ function processSuricataEvent(event: Record<string, any>): AlertItem[] {
   return created;
 }
 
-// Seed initial realistic events
-[
-  {
-    event_type: 'dns',
-    src_ip: '10.0.14.88',
-    dns: {
-      rrname: '4f9a8b7c6d5e4f3a2b1c0d9e8f7a6b5c.x91k2m.c2-tunnel.net',
-      rrtype: 'TXT',
-      rcode: 0,
-    },
-  },
-  {
-    event_type: 'dns',
-    src_ip: '10.0.14.23',
-    dns: {
-      rrname: 'invoice-update-auth-portal.zip',
-      rrtype: 'A',
-      rcode: 0,
-    },
-  },
-  {
-    event_type: 'alert',
-    src_ip: '198.51.100.42',
-    dest_ip: config.server.public_ip,
-    proto: 'TCP',
-    alert: {
-      signature: 'ET WEB_SERVER SQL Injection Attempt in URI (UNION SELECT)',
-      category: 'Web Application Attack',
-      severity: 1,
-    },
-  },
-  {
-    event_type: 'alert',
-    src_ip: '192.0.2.199',
-    dest_ip: config.server.public_ip,
-    proto: 'TCP',
-    alert: {
-      signature: 'ET SCAN Nmap Scripting Engine User-Agent Detected',
-      category: 'Attempted Information Leak',
-      severity: 2,
-    },
-  },
-].forEach((ev) => processSuricataEvent(ev));
+// Tail /var/log/suricata/eve.json continuously when running on Ubuntu
+let lastEveSize = 0;
+function pollSuricataEveLog() {
+  const evePath = config.monitoring.suricata_eve_path;
+  if (!fs.existsSync(evePath)) return;
+  try {
+    const stat = fs.statSync(evePath);
+    if (stat.size < lastEveSize) lastEveSize = 0;
+    if (stat.size === lastEveSize) return;
+
+    const startOffset = lastEveSize === 0 ? Math.max(0, stat.size - 65536) : lastEveSize;
+    const lengthToRead = stat.size - startOffset;
+    if (lengthToRead <= 0) return;
+
+    const fd = fs.openSync(evePath, 'r');
+    const buffer = Buffer.alloc(lengthToRead);
+    fs.readSync(fd, buffer, 0, lengthToRead, startOffset);
+    fs.closeSync(fd);
+    lastEveSize = stat.size;
+
+    const lines = buffer.toString('utf8').split(/\r?\n/);
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('{')) continue;
+      try {
+        processSuricataEvent(JSON.parse(trimmed));
+      } catch {
+        // ignore partial JSON line
+      }
+    }
+  } catch {
+    // ignore read error
+  }
+}
+setInterval(pollSuricataEveLog, 1500);
+pollSuricataEveLog();
 
 let lastBucketError: string | null = null;
 let lastBucketSource: 'hf-s3-bucket' | 'hf-datasets-server' | 'fallback' = 'fallback';
@@ -290,7 +296,6 @@ async function loadHfBucketLangChainDocs(
   limit = 5,
   key?: string
 ): Promise<Document[]> {
-  // 1. Primary: Hugging Face S3-compatible bucket (s3.hf.co) via AWS SDK
   if (hasHfBucketCredentials()) {
     try {
       const result = await loadHfBucketDocuments(limit, key);
@@ -309,7 +314,6 @@ async function loadHfBucketLangChainDocs(
       'No bucket credentials (AWS_ACCESS_KEY_ID/AWS_SECRET_ACCESS_KEY or HUGGINGFACE_API_KEY)';
   }
 
-  // 2. Secondary: public Hugging Face datasets-server rows API
   try {
     const params = new URLSearchParams({
       dataset: datasetId,
@@ -320,7 +324,9 @@ async function loadHfBucketLangChainDocs(
     });
     const res = await fetch(`https://datasets-server.huggingface.co/rows?${params.toString()}`);
     if (res.ok) {
-      const data = (await res.json()) as { rows?: Array<{ row: Record<string, unknown>; row_idx: number }> };
+      const data = (await res.json()) as {
+        rows?: Array<{ row: Record<string, unknown>; row_idx: number }>;
+      };
       if (data.rows && data.rows.length > 0) {
         lastBucketSource = 'hf-datasets-server';
         return data.rows.map(
@@ -337,39 +343,11 @@ async function loadHfBucketLangChainDocs(
       }
     }
   } catch {
-    // Fallback to bucket snapshot documents
+    // ignore
   }
 
   lastBucketSource = 'fallback';
-  const fallbackRows = [
-    {
-      attack_type: 'DNS Tunneling (Iodine / DNScat2)',
-      indicator: 'Subdomain Shannon entropy > 3.8 bits, TXT/NULL record flood, label length > 52 chars',
-      mitigation: 'Inspect host egress on UDP/53, block authoritative C2 domain in unbound/bind9, enforce internal DNS resolver via UFW.',
-    },
-    {
-      attack_type: 'DGA Botnet Beaconing',
-      indicator: 'High NXDOMAIN ratio (> 0.5) within 5-minute sliding window across .xyz, .top, .biz TLDs',
-      mitigation: 'Isolate internal source IP, correlate with Zeek conn.log for outbound TCP/443 connections, sinkhole domain list.',
-    },
-    {
-      attack_type: 'HTTP SQLi / Web Shell Probe',
-      indicator: 'Suricata ET WEB_SERVER signature severity 1 on Ubuntu Nginx/React reverse proxy',
-      mitigation: 'Rate-limit offending IP via UFW or Nginx limit_req_zone, audit access.log and parameter sanitization.',
-    },
-  ];
-
-  return fallbackRows.map(
-    (row, idx) =>
-      new Document({
-        pageContent: JSON.stringify(row),
-        metadata: {
-          dataset: `${datasetId} (bucket-snapshot)`,
-          bucket_uri: config.dataset_bucket.bucket_uri,
-          row_idx: idx,
-        },
-      })
-  );
+  return [];
 }
 
 app.get('/api/config', (_req, res) => {
@@ -377,12 +355,19 @@ app.get('/api/config', (_req, res) => {
 });
 
 app.put('/api/config/dns_anomaly', (req, res) => {
-  const { max_queries_per_client_per_minute, max_nxdomain_ratio, high_entropy_threshold, suspicious_tlds } = req.body;
+  const {
+    max_queries_per_client_per_minute,
+    max_nxdomain_ratio,
+    high_entropy_threshold,
+    suspicious_tlds,
+  } = req.body;
   config.dns_anomaly = {
     max_queries_per_client_per_minute: Number(max_queries_per_client_per_minute),
     max_nxdomain_ratio: Number(max_nxdomain_ratio),
     high_entropy_threshold: Number(high_entropy_threshold),
-    suspicious_tlds: Array.isArray(suspicious_tlds) ? suspicious_tlds : config.dns_anomaly.suspicious_tlds,
+    suspicious_tlds: Array.isArray(suspicious_tlds)
+      ? suspicious_tlds
+      : config.dns_anomaly.suspicious_tlds,
   };
   res.json({ status: 'updated', dns_anomaly: config.dns_anomaly });
 });
@@ -390,9 +375,39 @@ app.put('/api/config/dns_anomaly', (req, res) => {
 app.get('/api/status', (_req, res) => {
   const now = Date.now() / 1000;
   const activeClients: Record<string, number> = {};
+  let totalQpm = 0;
+
   for (const [ip, dq] of dnsCounts.entries()) {
     while (dq.length > 0 && now - dq[0] > 60) dq.shift();
-    if (dq.length > 0) activeClients[ip] = dq.length;
+    if (dq.length > 0) {
+      activeClients[ip] = dq.length;
+      totalQpm += dq.length;
+    }
+  }
+
+  let totalNx5m = 0;
+  for (const [, nx] of nxdomainCounts.entries()) {
+    while (nx.length > 0 && now - nx[0] > 300) nx.shift();
+    totalNx5m += nx.length;
+  }
+
+  const maxEntropy = Number(
+    recentDnsQueries.reduce((max, q) => (q.entropy > max ? q.entropy : max), 0).toFixed(2)
+  );
+
+  const timeLabel = new Date().toLocaleTimeString('en-US', { hour12: false });
+  if (
+    telemetryHistory.length === 0 ||
+    telemetryHistory[telemetryHistory.length - 1].timestamp !== timeLabel
+  ) {
+    telemetryHistory.push({
+      timestamp: timeLabel,
+      qpm: totalQpm,
+      nxdomain: totalNx5m,
+      entropy: maxEntropy,
+      alerts: alerts.length,
+    });
+    if (telemetryHistory.length > 20) telemetryHistory.shift();
   }
 
   res.json({
@@ -407,12 +422,23 @@ app.get('/api/status', (_req, res) => {
     tracked_dns_clients: dnsCounts.size,
     client_query_rates: activeClients,
     recent_dns_queries: recentDnsQueries.slice(0, 25),
+    metrics: {
+      dns_queries_per_min: totalQpm,
+      nxdomain_last_5m: totalNx5m,
+      max_entropy_bits: maxEntropy,
+      history: telemetryHistory,
+    },
   });
 });
 
 app.get('/api/alerts', (req, res) => {
   const limit = Number(req.query.limit || 100);
   res.json(alerts.slice(0, limit));
+});
+
+app.post('/api/events', (req, res) => {
+  const created = processSuricataEvent(req.body || {});
+  res.json({ processed: true, alerts_created: created.length, alerts: created });
 });
 
 app.get('/api/dataset', async (req, res) => {
@@ -432,14 +458,13 @@ app.get('/api/dataset', async (req, res) => {
   });
 });
 
-// Lists object keys in the Hugging Face S3 bucket (s3.hf.co)
 app.get('/api/dataset/objects', async (_req, res) => {
   try {
     const keys = await listHfBucketObjects(100);
     res.json({ endpoint: hfBucket.endpoint, bucket: hfBucket.bucket, keys });
   } catch (err) {
     res.status(502).json({
-      error: err instanceof Error ? err.message : 'Failed to list bucket objects',
+      error: describeBucketError(err, hfBucket.bucket),
     });
   }
 });
@@ -544,7 +569,8 @@ app.post('/api/analyze', async (req, res) => {
         metadata: d.metadata,
       })),
       operator_question:
-        prompt || 'Analyze this anomaly using the Hugging Face bucket threat dataset context and provide Ubuntu/Suricata/Zeek/UFW remediation commands.',
+        prompt ||
+        'Analyze this anomaly using the Hugging Face bucket threat dataset context and provide Ubuntu/Suricata/Zeek/UFW remediation commands.',
     };
 
     const apiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
@@ -583,5 +609,5 @@ app.post('/api/generate', async (req, res) => {
 
 const port = process.env.PORT || 8000;
 app.listen(port, () => {
-  console.log(`NADS Backend server running on http://localhost:${port}`);
+  console.log(`NADS Backend server running on http://0.0.0.0:${port}`);
 });

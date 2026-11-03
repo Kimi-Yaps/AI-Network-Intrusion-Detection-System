@@ -46,6 +46,7 @@ alerts: deque[dict[str, Any]] = deque(maxlen=1000)
 dns_counts: dict[str, deque[float]] = defaultdict(deque)
 nxdomain_counts: dict[str, deque[float]] = defaultdict(deque)
 recent_dns_queries: deque[dict[str, Any]] = deque(maxlen=250)
+telemetry_history: deque[dict[str, Any]] = deque(maxlen=20)
 
 
 def load_persisted_alerts() -> None:
@@ -381,7 +382,17 @@ def status():
             nx.popleft()
         total_nx_5m += len(nx)
 
-    max_entropy = max((q.get("entropy", 0.0) for q in recent_dns_queries), default=0.0)
+    max_entropy = round(max((q.get("entropy", 0.0) for q in recent_dns_queries), default=0.0), 2)
+
+    point = {
+        "timestamp": time.strftime("%H:%M:%S"),
+        "qpm": total_qpm,
+        "nxdomain": total_nx_5m,
+        "entropy": max_entropy,
+        "alerts": len(alerts),
+    }
+    if not telemetry_history or telemetry_history[-1]["timestamp"] != point["timestamp"]:
+        telemetry_history.append(point)
 
     return {
         "server_name": config["server"]["name"],
@@ -398,7 +409,8 @@ def status():
         "metrics": {
             "dns_queries_per_min": total_qpm,
             "nxdomain_last_5m": total_nx_5m,
-            "max_entropy_bits": round(max_entropy, 2),
+            "max_entropy_bits": max_entropy,
+            "history": list(telemetry_history),
         },
     }
 

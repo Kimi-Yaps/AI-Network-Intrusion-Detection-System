@@ -49,6 +49,14 @@ export interface ServerConfig {
   };
 }
 
+export interface TelemetryPoint {
+  timestamp: string;
+  qpm: number;
+  nxdomain: number;
+  entropy: number;
+  alerts: number;
+}
+
 export interface ServerStatus {
   server_name: string;
   environment?: string;
@@ -74,6 +82,7 @@ export interface ServerStatus {
     dns_queries_per_min: number;
     nxdomain_last_5m: number;
     max_entropy_bits: number;
+    history?: TelemetryPoint[];
   };
 }
 
@@ -121,4 +130,3 @@ export interface EntityRowItem {
   metricText: string;
   onClick?: () => void;
 }
-
