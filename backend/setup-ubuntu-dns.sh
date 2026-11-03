@@ -84,6 +84,8 @@ cp "${BACKEND_DIR}/config.yaml" /etc/nads/config.yaml
 sed -i "s/name: .*/name: \"${SERVER_HOSTNAME}\"/" /etc/nads/config.yaml
 sed -i "s/listen_interface: .*/listen_interface: \"${IFACE}\"/" /etc/nads/config.yaml
 sed -i "s/public_ip: .*/public_ip: \"${SERVER_IP}\"/" /etc/nads/config.yaml
+sed -i "s|react_app_url: .*|react_app_url: \"http://${SERVER_IP}\"|" /etc/nads/config.yaml
+sed -i "s|api_url: .*|api_url: \"http://${SERVER_IP}/api\"|" /etc/nads/config.yaml
 
 # Suricata 8.x: create /etc/default/suricata AND update interface in /etc/suricata/suricata.yaml
 echo "IFACE=${IFACE}" >/etc/default/suricata

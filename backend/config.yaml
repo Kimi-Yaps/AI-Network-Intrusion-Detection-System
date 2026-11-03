@@ -12,6 +12,8 @@ web:
     - "https://nads.example.com"
     - "http://localhost:5173"
     - "http://127.0.0.1:5173"
+    - "http://192.168.150.129"
+    - "http://192.168.150.129:5173"
 
 monitoring:
   suricata_eve_path: "/var/log/suricata/eve.json"
