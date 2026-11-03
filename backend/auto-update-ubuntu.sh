@@ -62,7 +62,12 @@ git fetch origin "${BRANCH}" --quiet
 LOCAL_SHA="$(git rev-parse HEAD)"
 REMOTE_SHA="$(git rev-parse "origin/${BRANCH}")"
 
-if [ "${LOCAL_SHA}" = "${REMOTE_SHA}" ]; then
+NEEDS_NGINX_FIX=0
+if [ ! -f /var/www/nads/index.html ] || grep -q "/dist;" /etc/nginx/sites-available/nads 2>/dev/null; then
+    NEEDS_NGINX_FIX=1
+fi
+
+if [ "${LOCAL_SHA}" = "${REMOTE_SHA}" ] && [ "${NEEDS_NGINX_FIX}" = "0" ] && [ "${1:-}" != "--force" ]; then
     if [ -f "${BACKUP_DIR}/.env.bak" ] && [ ! -f "${PROJECT_DIR}/.env" ]; then
         cp -a "${BACKUP_DIR}/.env.bak" "${PROJECT_DIR}/.env"
     fi
@@ -70,10 +75,13 @@ if [ "${LOCAL_SHA}" = "${REMOTE_SHA}" ]; then
     exit 0
 fi
 
-echo "[nads-update] Updating (${LOCAL_SHA:0:7} -> ${REMOTE_SHA:0:7}) with --autostash (preserving all local files)..."
-
-# 4. Pull with --autostash so local changes & untracked files are never deleted
-git pull --rebase --autostash origin "${BRANCH}"
+if [ "${LOCAL_SHA}" != "${REMOTE_SHA}" ]; then
+    echo "[nads-update] Updating (${LOCAL_SHA:0:7} -> ${REMOTE_SHA:0:7}) with --autostash (preserving all local files)..."
+    # 4. Pull with --autostash so local changes & untracked files are never deleted
+    git pull --rebase --autostash origin "${BRANCH}"
+else
+    echo "[nads-update] Applying Nginx /var/www/nads deployment & service refresh..."
+fi
 
 # 5. Ensure .env is always present
 if [ -f "${BACKUP_DIR}/.env.bak" ] && [ ! -f "${PROJECT_DIR}/.env" ]; then
