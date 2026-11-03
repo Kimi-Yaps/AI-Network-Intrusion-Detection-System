@@ -37,7 +37,9 @@ apt-get install -y suricata
 
 # Upgrade Node.js to 22.x if missing or older than v20 (Vite 8 requires Node >= 20.19 / 22.12)
 if ! command -v node >/dev/null 2>&1 || [ "$(node -v | cut -d. -f1 | tr -d 'v')" -lt 22 ]; then
-    echo "Upgrading Node.js to v22 LTS..."
+    echo "Upgrading Node.js from $(node -v 2>/dev/null || echo 'none') to v22 LTS..."
+    apt-get remove -y nodejs npm libnode-dev 2>/dev/null || true
+    apt-get autoremove -y
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
     apt-get install -y nodejs
 fi
