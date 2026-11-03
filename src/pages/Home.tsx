@@ -424,16 +424,18 @@ function Home() {
     },
   ];
 
-  const palette = ['#ff6b00', '#2563eb', '#10b981', '#8b5cf6'];
-  const topSourceIpItems: EntityRowItem[] = filteredAlerts.slice(0, 4).map((alert, idx) => ({
-    id: `src-${alert.id}`,
-    initials: alert.source_ip.split('.').slice(-1)[0] || 'IP',
-    badgeColor: palette[idx % palette.length],
-    primaryText: alert.source_ip,
-    secondaryText: alert.category,
-    metricText: alert.severity.toUpperCase(),
-    onClick: () => void analyzeWithAi(alert),
-  }));
+  const topSourceIpItems: EntityRowItem[] = useMemo(() => {
+    const palette = ['#ff6b00', '#2563eb', '#10b981', '#8b5cf6'];
+    return filteredAlerts.slice(0, 4).map((alert, idx) => ({
+      id: `src-${alert.id}`,
+      initials: alert.source_ip.split('.').slice(-1)[0] || 'IP',
+      badgeColor: palette[idx % palette.length],
+      primaryText: alert.source_ip,
+      secondaryText: alert.category,
+      metricText: alert.severity.toUpperCase(),
+      onClick: () => void analyzeWithAi(alert),
+    }));
+  }, [filteredAlerts]);
 
   const topSensorDepartments: EntityRowItem[] = [
     {

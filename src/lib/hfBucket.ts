@@ -185,32 +185,6 @@ export function textToDocuments(
     );
 }
 
-/** Turns opaque AWS SDK errors (e.g. "UnknownError") into readable messages. */
-export function describeBucketError(err: unknown, bucket: string, key?: string): string {
-  const e = err as {
-    name?: string;
-    message?: string;
-    Code?: string;
-    $metadata?: { httpStatusCode?: number };
-  };
-  const status = e?.$metadata?.httpStatusCode;
-  const target = key ? `s3://${bucket}/${key}` : `s3://${bucket}`;
-  const hints: Record<number, string> = {
-    301: 'wrong endpoint/region for this bucket',
-    400: 'bad request (check endpoint path and bucket name)',
-    401: 'credentials rejected',
-    403: 'access denied (token lacks permission for this bucket, or wrong access key/secret)',
-    404: 'bucket or object key not found (check HF_S3_BUCKET / HF_S3_KEY)',
-  };
-  const parts = [
-    e?.name && e.name !== 'UnknownError' ? e.name : e?.Code,
-    status ? `HTTP ${status}` : undefined,
-    status && hints[status] ? hints[status] : undefined,
-    target,
-  ].filter(Boolean);
-  return parts.length > 1 ? parts.join(' — ') : e?.message || String(err);
-}
-
 /** Reads an object from the Hugging Face bucket and returns LangChain Documents. */
 export async function loadHfBucketDocuments(
   limit = 5,
@@ -218,16 +192,10 @@ export async function loadHfBucketDocuments(
 ): Promise<HfBucketLoadResult> {
   const settings = getHfBucketSettings();
   const targetKey = key || settings.key;
-  let text: string;
-  try {
-    text = await readHfBucketObject(targetKey);
-  } catch (err) {
-    throw new Error(describeBucketError(err, settings.bucket, targetKey));
-  }
+  const text = await readHfBucketObject(targetKey);
   return {
     documents: textToDocuments(text, targetKey, settings, limit),
     key: targetKey,
     settings,
   };
 }
-

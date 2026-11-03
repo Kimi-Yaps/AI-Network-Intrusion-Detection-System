@@ -6,7 +6,6 @@ import cors from 'cors';
 import { GoogleGenAI } from '@google/genai';
 import { Document } from '@langchain/core/documents';
 import {
-  describeBucketError,
   getHfBucketSettings,
   hasHfBucketCredentials,
   listHfBucketObjects,
@@ -440,7 +439,7 @@ app.get('/api/dataset/objects', async (_req, res) => {
     res.json({ endpoint: hfBucket.endpoint, bucket: hfBucket.bucket, keys });
   } catch (err) {
     res.status(502).json({
-      error: describeBucketError(err, hfBucket.bucket),
+      error: err instanceof Error ? err.message : 'Failed to list bucket objects',
     });
   }
 });
