@@ -109,6 +109,10 @@ if [ -d "${PROJECT_DIR}/backend/.venv" ]; then
     "${PROJECT_DIR}/backend/.venv/bin/pip" install -q -r "${PROJECT_DIR}/backend/requirements.txt"
 fi
 
+if systemctl is-active --quiet nads-ingest.service; then
+    sudo systemctl stop nads-ingest.service || true
+    sudo systemctl disable nads-ingest.service || true
+fi
 if systemctl is-active --quiet nads-api.service; then
     sudo systemctl restart nads-api.service
 fi

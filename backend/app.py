@@ -47,19 +47,61 @@ dns_counts: dict[str, deque[float]] = defaultdict(deque)
 nxdomain_counts: dict[str, deque[float]] = defaultdict(deque)
 recent_dns_queries: deque[dict[str, Any]] = deque(maxlen=250)
 telemetry_history: deque[dict[str, Any]] = deque(maxlen=20)
+alert_dedup_cache: dict[tuple[str, str, str], float] = {}
+ALERT_COOLDOWN_SECONDS = 60.0
+
+BENIGN_SURICATA_PREFIXES = (
+    "SURICATA STREAM",
+    "SURICATA Applayer",
+    "SURICATA HTTP",
+    "SURICATA TCPv4",
+    "SURICATA IPv4",
+)
+
+
+def is_benign_suricata_noise(summary: str, evidence: dict[str, Any] | None = None) -> bool:
+    """Filters out Suricata's internal TCP/WebSocket stream decode noise on dashboard ports."""
+    s = (summary or "").strip()
+    if any(s.startswith(prefix) for prefix in BENIGN_SURICATA_PREFIXES):
+        return True
+    if evidence and isinstance(evidence, dict):
+        alert_meta = evidence.get("alert", {})
+        if isinstance(alert_meta, dict) and alert_meta.get("category") == "Generic Protocol Command Decode":
+            if s.startswith("SURICATA "):
+                return True
+    return False
 
 
 def load_persisted_alerts() -> None:
-    """Loads previously saved alerts from backend/data/alerts_history.jsonl on startup."""
+    """Loads previously saved alerts from backend/data/alerts_history.jsonl on startup, pruning stream noise."""
     if not ALERTS_HISTORY_FILE.exists():
         return
     try:
         with open(ALERTS_HISTORY_FILE, "r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()[-500:]
+        kept: list[dict[str, Any]] = []
+        seen_keys: set[tuple[str, str, str]] = set()
         for line in lines:
             line = line.strip()
-            if line:
-                alerts.appendleft(json.loads(line))
+            if not line:
+                continue
+            item = json.loads(line)
+            if is_benign_suricata_noise(item.get("summary", ""), item.get("evidence")):
+                continue
+            key = (
+                str(item.get("source_ip", "")),
+                str(item.get("category", "")),
+                str(item.get("summary", "")),
+            )
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            kept.append(item)
+            alerts.appendleft(item)
+        # Rewrite history file without noisy/duplicate entries
+        with open(ALERTS_HISTORY_FILE, "w", encoding="utf-8") as f:
+            for item in kept:
+                f.write(json.dumps(item) + "\n")
     except Exception:
         pass
 
@@ -89,7 +131,17 @@ def add_alert(
     source_ip: str,
     summary: str,
     evidence: dict[str, Any],
-) -> dict[str, Any]:
+) -> dict[str, Any] | None:
+    if is_benign_suricata_noise(summary, evidence):
+        return None
+    now = time.time()
+    dedup_subject = category if category in ("DNS volume", "Possible DGA") else summary
+    dedup_key = (source_ip, category, dedup_subject)
+    last_seen = alert_dedup_cache.get(dedup_key, 0.0)
+    if now - last_seen < ALERT_COOLDOWN_SECONDS:
+        return None
+    alert_dedup_cache[dedup_key] = now
+
     alert = {
         "id": f"{time.time_ns()}",
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
@@ -104,6 +156,11 @@ def add_alert(
     return alert
 
 
+def append_if_created(target: list[dict[str, Any]], alert: dict[str, Any] | None) -> None:
+    if alert is not None:
+        target.append(alert)
+
+
 def process_suricata_event(event: dict[str, Any]) -> list[dict[str, Any]]:
     created_alerts: list[dict[str, Any]] = []
     event_type = event.get("event_type")
@@ -112,14 +169,15 @@ def process_suricata_event(event: dict[str, Any]) -> list[dict[str, Any]]:
         src = event.get("src_ip", "unknown")
         signature = event.get("alert", {}).get("signature", "Unknown alert")
         severity_num = event.get("alert", {}).get("severity", 3)
-        created_alerts.append(
+        append_if_created(
+            created_alerts,
             add_alert(
                 severity="high" if severity_num <= 2 else "medium",
                 category="IDS signature",
                 source_ip=src,
                 summary=signature,
                 evidence=event,
-            )
+            ),
         )
 
     elif event_type == "dns":
@@ -169,14 +227,15 @@ def process_suricata_event(event: dict[str, Any]) -> list[dict[str, Any]]:
 
         max_qpm = config["dns_anomaly"]["max_queries_per_client_per_minute"]
         if not is_answer and len(dq) > max_qpm:
-            created_alerts.append(
+            append_if_created(
+                created_alerts,
                 add_alert(
                     severity="high",
                     category="DNS volume",
                     source_ip=src,
                     summary=f"High DNS query volume: {len(dq)} queries/minute (threshold: {max_qpm})",
                     evidence={"query": qname, "queries_per_minute": len(dq)},
-                )
+                ),
             )
 
         if rcode == 3 or str(rcode).upper() == "NXDOMAIN":
@@ -189,7 +248,8 @@ def process_suricata_event(event: dict[str, Any]) -> list[dict[str, Any]]:
             if len(nx) >= 20 or (
                 len(dq) >= 10 and nx_ratio >= config["dns_anomaly"]["max_nxdomain_ratio"]
             ):
-                created_alerts.append(
+                append_if_created(
+                    created_alerts,
                     add_alert(
                         severity="medium",
                         category="Possible DGA",
@@ -200,12 +260,13 @@ def process_suricata_event(event: dict[str, Any]) -> list[dict[str, Any]]:
                             "nxdomain_ratio": round(nx_ratio, 2),
                             "query": qname,
                         },
-                    )
+                    ),
                 )
 
         if not is_answer and len(labels) >= 3:
             if entropy > config["dns_anomaly"]["high_entropy_threshold"]:
-                created_alerts.append(
+                append_if_created(
+                    created_alerts,
                     add_alert(
                         severity="high",
                         category="Possible DNS tunneling",
@@ -217,7 +278,7 @@ def process_suricata_event(event: dict[str, Any]) -> list[dict[str, Any]]:
                             "query": qname,
                             "rrtype": rrtype,
                         },
-                    )
+                    ),
                 )
 
         suspicious_tlds = [
@@ -225,14 +286,15 @@ def process_suricata_event(event: dict[str, Any]) -> list[dict[str, Any]]:
             for t in config["dns_anomaly"].get("suspicious_tlds", [])
         ]
         if not is_answer and tld and tld in suspicious_tlds:
-            created_alerts.append(
+            append_if_created(
+                created_alerts,
                 add_alert(
                     severity="medium",
                     category="Suspicious TLD",
                     source_ip=src,
                     summary=f"Query to monitored suspicious TLD (.{tld}): {qname}",
                     evidence={"tld": tld, "query": qname, "rrtype": rrtype},
-                )
+                ),
             )
 
     return created_alerts
@@ -437,6 +499,9 @@ def get_alerts(limit: int = 100):
 @app.delete("/api/alerts")
 def clear_alerts():
     alerts.clear()
+    alert_dedup_cache.clear()
+    dns_counts.clear()
+    nxdomain_counts.clear()
     if ALERTS_HISTORY_FILE.exists():
         ALERTS_HISTORY_FILE.unlink(missing_ok=True)
     return {"cleared": True}
