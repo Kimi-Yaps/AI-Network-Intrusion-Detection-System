@@ -4,6 +4,7 @@ declare module 'express' {
     get(path: string, handler: express.RequestHandler): void;
     post(path: string, handler: express.RequestHandler): void;
     put(path: string, handler: express.RequestHandler): void;
+    delete(path: string, handler: express.RequestHandler): void;
     listen(port: number | string, callback?: () => void): void;
   };
   namespace express {

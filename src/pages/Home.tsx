@@ -312,7 +312,7 @@ function Home() {
       trendLabel: `max ratio ${config.dns_anomaly.max_nxdomain_ratio}`,
       color: 'yellow',
       iconSymbol: '⚑',
-      onActionClick: () => void triggerSimulation('dga_nxdomain'),
+      onActionClick: () => setActiveSection('monitoring'),
     },
     {
       label: 'Peak Entropy',
@@ -323,7 +323,7 @@ function Home() {
       trendLabel: `threshold ${config.dns_anomaly.high_entropy_threshold}b`,
       color: 'orange',
       iconSymbol: '⚡',
-      onActionClick: () => void triggerSimulation('dns_tunneling'),
+      onActionClick: () => setActiveSection('dns'),
     },
     {
       label: 'Active Alerts',
