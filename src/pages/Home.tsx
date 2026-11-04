@@ -209,13 +209,10 @@ function Home() {
     };
   }, [activeApi, connected]);
 
-  const triggerSimulation = async (scenario: string) => {
+  const clearAllAlerts = async () => {
     try {
-      await fetch(`${activeApi}/api/simulate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ scenario }),
-      });
+      await fetch(`${activeApi}/api/alerts`, { method: 'DELETE' });
+      setAlerts([]);
       await loadTelemetry();
     } catch {
       // ignore if backend unreachable
@@ -451,8 +448,7 @@ function Home() {
                 alerts={filteredAlerts}
                 analyzing={analyzing}
                 onAnalyzeAlert={(a) => void analyzeWithAi(a)}
-                onSimulate={(scenario) => void triggerSimulation(scenario)}
-                maxQpm={config.dns_anomaly.max_queries_per_client_per_minute}
+                onClearAlerts={() => void clearAllAlerts()}
               />
             </>
           )}
@@ -472,8 +468,7 @@ function Home() {
               }
               analyzing={analyzing}
               onAnalyzeAlert={(a) => void analyzeWithAi(a)}
-              onSimulate={(scenario) => void triggerSimulation(scenario)}
-              maxQpm={config.dns_anomaly.max_queries_per_client_per_minute}
+              onClearAlerts={() => void clearAllAlerts()}
             />
           )}
 
@@ -684,7 +679,6 @@ function Home() {
                       <th scope="col">Detection Signal</th>
                       <th scope="col">Active Threshold</th>
                       <th scope="col">Initial SOC Response</th>
-                      <th scope="col">Test Rule</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -695,15 +689,6 @@ function Home() {
                         &gt; {config.dns_anomaly.max_queries_per_client_per_minute} queries/min
                       </td>
                       <td>Rate-limit or investigate internal/external host</td>
-                      <td>
-                        <button
-                          type="button"
-                          className="action-btn"
-                          onClick={() => void triggerSimulation('dns_flood')}
-                        >
-                          Simulate Flood
-                        </button>
-                      </td>
                     </tr>
                     <tr>
                       <th scope="row">DGA / Malware C2</th>
@@ -713,60 +698,24 @@ function Home() {
                         {config.dns_anomaly.max_nxdomain_ratio}
                       </td>
                       <td>Block/sinkhole &amp; query reputation feeds</td>
-                      <td>
-                        <button
-                          type="button"
-                          className="action-btn"
-                          onClick={() => void triggerSimulation('dga_nxdomain')}
-                        >
-                          Simulate DGA
-                        </button>
-                      </td>
                     </tr>
                     <tr>
                       <th scope="row">DNS Tunneling</th>
                       <td>High Shannon entropy on subdomain labels, long names, TXT queries</td>
                       <td>Entropy &gt; {config.dns_anomaly.high_entropy_threshold} bits</td>
                       <td>Inspect host and UDP/53 egress policy</td>
-                      <td>
-                        <button
-                          type="button"
-                          className="action-btn"
-                          onClick={() => void triggerSimulation('dns_tunneling')}
-                        >
-                          Simulate Tunnel
-                        </button>
-                      </td>
                     </tr>
                     <tr>
                       <th scope="row">Suspicious TLD</th>
                       <td>Queries resolving newly registered or high-risk TLDs</td>
                       <td>.{config.dns_anomaly.suspicious_tlds.join(', .')}</td>
                       <td>Audit Zeek conn.log for subsequent HTTP/TLS connections</td>
-                      <td>
-                        <button
-                          type="button"
-                          className="action-btn"
-                          onClick={() => void triggerSimulation('suspicious_tld')}
-                        >
-                          Simulate TLD
-                        </button>
-                      </td>
                     </tr>
                     <tr>
                       <th scope="row">Web Attack</th>
                       <td>Suricata EVE alert on HTTP, SQL injection, scanning, RCE</td>
                       <td>Suricata severity 1–2</td>
                       <td>Review source IP, Nginx access logs, and UFW rules</td>
-                      <td>
-                        <button
-                          type="button"
-                          className="action-btn"
-                          onClick={() => void triggerSimulation('web_attack')}
-                        >
-                          Simulate Web Attack
-                        </button>
-                      </td>
                     </tr>
                   </tbody>
                 </table>

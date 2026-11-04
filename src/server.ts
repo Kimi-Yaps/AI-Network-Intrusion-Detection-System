@@ -252,16 +252,19 @@ function processSuricataEvent(event: Record<string, any>): AlertItem[] {
 }
 
 // Tail /var/log/suricata/eve.json continuously when running on Ubuntu
-let lastEveSize = 0;
+let lastEveSize = -1;
 function pollSuricataEveLog() {
   const evePath = config.monitoring.suricata_eve_path;
   if (!fs.existsSync(evePath)) return;
   try {
     const stat = fs.statSync(evePath);
-    if (stat.size < lastEveSize) lastEveSize = 0;
+    if (lastEveSize === -1 || stat.size < lastEveSize) {
+      lastEveSize = stat.size;
+      return;
+    }
     if (stat.size === lastEveSize) return;
 
-    const startOffset = lastEveSize === 0 ? Math.max(0, stat.size - 65536) : lastEveSize;
+    const startOffset = lastEveSize;
     const lengthToRead = stat.size - startOffset;
     if (lengthToRead <= 0) return;
 
@@ -436,6 +439,13 @@ app.get('/api/alerts', (req, res) => {
   res.json(alerts.slice(0, limit));
 });
 
+app.delete('/api/alerts', (_req, res) => {
+  alerts.length = 0;
+  dnsCounts.clear();
+  nxdomainCounts.clear();
+  res.json({ cleared: true });
+});
+
 app.post('/api/events', (req, res) => {
   const created = processSuricataEvent(req.body || {});
   res.json({ processed: true, alerts_created: created.length, alerts: created });
@@ -467,91 +477,6 @@ app.get('/api/dataset/objects', async (_req, res) => {
       error: describeBucketError(err, hfBucket.bucket),
     });
   }
-});
-
-app.post('/api/simulate', (req, res) => {
-  const scenario = String(req.body?.scenario || '').toLowerCase();
-  const created: AlertItem[] = [];
-
-  if (scenario === 'dns_tunneling') {
-    created.push(
-      ...processSuricataEvent({
-        event_type: 'dns',
-        src_ip: '10.0.14.88',
-        dns: {
-          rrname: 'a9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4.k8z9q1w2e3r4.exfil-c2.org',
-          rrtype: 'TXT',
-          rcode: 0,
-        },
-      })
-    );
-  } else if (scenario === 'dga_nxdomain') {
-    const src = '10.0.14.105';
-    for (let i = 0; i < 21; i++) {
-      created.push(
-        ...processSuricataEvent({
-          event_type: 'dns',
-          src_ip: src,
-          dns: {
-            rrname: `q${i}x8k9m2v7p4n${i}.biz`,
-            rrtype: 'A',
-            rcode: 3,
-          },
-        })
-      );
-    }
-  } else if (scenario === 'dns_flood') {
-    const src = '10.0.14.210';
-    const limit = config.dns_anomaly.max_queries_per_client_per_minute;
-    const now = Date.now() / 1000;
-    dnsCounts.set(src, Array(limit).fill(now));
-    created.push(
-      ...processSuricataEvent({
-        event_type: 'dns',
-        src_ip: src,
-        dns: {
-          rrname: 'api-lookup.internal.example.com',
-          rrtype: 'A',
-          rcode: 0,
-        },
-      })
-    );
-  } else if (scenario === 'suspicious_tld') {
-    created.push(
-      ...processSuricataEvent({
-        event_type: 'dns',
-        src_ip: '10.0.14.54',
-        dns: {
-          rrname: 'credential-harvest-login.xyz',
-          rrtype: 'A',
-          rcode: 0,
-        },
-      })
-    );
-  } else if (scenario === 'web_attack') {
-    created.push(
-      ...processSuricataEvent({
-        event_type: 'alert',
-        src_ip: '203.0.113.244',
-        dest_ip: config.server.public_ip,
-        proto: 'TCP',
-        alert: {
-          signature: 'ET WEB_SERVER Possible CVE-2024 Remote Command Execution Attempt',
-          category: 'Web Application Attack',
-          severity: 1,
-        },
-      })
-    );
-  } else {
-    res.status(400).json({ error: `Unknown scenario: ${scenario}` });
-    return;
-  }
-
-  res.json({
-    scenario,
-    alerts_triggered: created.length,
-    latest_alert: created[created.length - 1] ?? null,
-  });
 });
 
 app.post('/api/analyze', async (req, res) => {

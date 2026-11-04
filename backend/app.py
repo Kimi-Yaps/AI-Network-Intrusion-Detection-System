@@ -301,30 +301,15 @@ def process_suricata_event(event: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 async def tail_suricata_log_task() -> None:
-    """Background task that reads recent lines and tails /var/log/suricata/eve.json on Ubuntu."""
+    """Background task that tails new live events from /var/log/suricata/eve.json on Ubuntu."""
     eve_path = Path(config["monitoring"]["suricata_eve_path"])
     poll_interval = float(config["monitoring"].get("poll_interval_seconds", 2))
-    initial_backlog_read = False
 
     while True:
         if eve_path.exists():
             try:
                 with open(eve_path, "r", encoding="utf-8", errors="replace") as f:
-                    if not initial_backlog_read:
-                        # Read up to last 64KB of existing live Suricata events on startup
-                        f.seek(0, os.SEEK_END)
-                        size = f.tell()
-                        f.seek(max(0, size - 65536), os.SEEK_SET)
-                        if size > 65536:
-                            f.readline()  # skip partial line
-                        for line in f.readlines():
-                            try:
-                                process_suricata_event(json.loads(line))
-                            except json.JSONDecodeError:
-                                continue
-                        initial_backlog_read = True
-                    else:
-                        f.seek(0, os.SEEK_END)
+                    f.seek(0, os.SEEK_END)
 
                     while True:
                         line = f.readline()
@@ -367,10 +352,6 @@ class DnsAnomalyConfigUpdate(BaseModel):
     max_nxdomain_ratio: float
     high_entropy_threshold: float
     suspicious_tlds: list[str]
-
-
-class SimulateRequest(BaseModel):
-    scenario: str
 
 
 class AnalyzeRequest(BaseModel):
@@ -511,95 +492,6 @@ def clear_alerts():
 def ingest_event(event: dict[str, Any]):
     created = process_suricata_event(event)
     return {"processed": True, "alerts_created": len(created), "alerts": created}
-
-
-@app.post("/api/simulate")
-def simulate_anomaly(req: SimulateRequest):
-    scenario = req.scenario.lower()
-    created: list[dict[str, Any]] = []
-
-    if scenario == "dns_tunneling":
-        created.extend(
-            process_suricata_event(
-                {
-                    "event_type": "dns",
-                    "src_ip": "10.0.14.88",
-                    "dns": {
-                        "rrname": "a9f8e7d6c5b4a3f2e1d0c9b8a7f6e5d4.k8z9q1w2e3r4.exfil-c2.org",
-                        "rrtype": "TXT",
-                        "rcode": 0,
-                    },
-                }
-            )
-        )
-    elif scenario == "dga_nxdomain":
-        src = "10.0.14.105"
-        for i in range(21):
-            created.extend(
-                process_suricata_event(
-                    {
-                        "event_type": "dns",
-                        "src_ip": src,
-                        "dns": {
-                            "rrname": f"q{i}x8k9m2v7p4n{i}.biz",
-                            "rrtype": "A",
-                            "rcode": 3,
-                        },
-                    }
-                )
-            )
-    elif scenario == "dns_flood":
-        src = "10.0.14.210"
-        limit = config["dns_anomaly"]["max_queries_per_client_per_minute"]
-        now = time.time()
-        dns_counts[src] = deque([now] * limit)
-        created.extend(
-            process_suricata_event(
-                {
-                    "event_type": "dns",
-                    "src_ip": src,
-                    "dns": {
-                        "rrname": "api-lookup.internal.example.com",
-                        "rrtype": "A",
-                        "rcode": 0,
-                    },
-                }
-            )
-        )
-    elif scenario == "suspicious_tld":
-        created.extend(
-            process_suricata_event(
-                {
-                    "event_type": "dns",
-                    "src_ip": "10.0.14.54",
-                    "dns": {
-                        "rrname": "credential-harvest-login.xyz",
-                        "rrtype": "A",
-                        "rcode": 0,
-                    },
-                }
-            )
-        )
-    elif scenario == "web_attack":
-        created.extend(
-            process_suricata_event(
-                {
-                    "event_type": "alert",
-                    "src_ip": "203.0.113.244",
-                    "dest_ip": config["server"]["public_ip"],
-                    "proto": "TCP",
-                    "alert": {
-                        "signature": "ET WEB_SERVER Possible CVE-2024 Remote Command Execution Attempt",
-                        "category": "Web Application Attack",
-                        "severity": 1,
-                    },
-                }
-            )
-        )
-    else:
-        raise HTTPException(status_code=400, detail=f"Unknown scenario: {req.scenario}")
-
-    return {"scenario": scenario, "alerts_triggered": len(created), "latest_alert": created[-1] if created else None}
 
 
 @app.post("/api/analyze")

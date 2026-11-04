@@ -6,8 +6,7 @@ interface AlertsTableProps {
   alerts: AnomalyAlert[];
   analyzing: boolean;
   onAnalyzeAlert: (alert: AnomalyAlert) => void;
-  onSimulate?: (scenario: string) => void;
-  maxQpm?: number;
+  onClearAlerts?: () => void;
 }
 
 function AlertsTable({
@@ -16,49 +15,16 @@ function AlertsTable({
   alerts,
   analyzing,
   onAnalyzeAlert,
-  onSimulate,
-  maxQpm = 120,
+  onClearAlerts,
 }: AlertsTableProps) {
   return (
     <section className="dashboard-section">
       <div className="tm-card-header">
         <h2 className="tm-card-title">{title}</h2>
-        {onSimulate && (
+        {onClearAlerts && (
           <div className="btn-group">
-            <button
-              type="button"
-              className="action-btn primary"
-              onClick={() => onSimulate('dns_tunneling')}
-            >
-              + DNS Tunneling
-            </button>
-            <button
-              type="button"
-              className="action-btn"
-              onClick={() => onSimulate('dga_nxdomain')}
-            >
-              + DGA Burst
-            </button>
-            <button
-              type="button"
-              className="action-btn"
-              onClick={() => onSimulate('dns_flood')}
-            >
-              + DNS Flood (&gt;{maxQpm}/m)
-            </button>
-            <button
-              type="button"
-              className="action-btn"
-              onClick={() => onSimulate('suspicious_tld')}
-            >
-              + Suspicious TLD
-            </button>
-            <button
-              type="button"
-              className="action-btn"
-              onClick={() => onSimulate('web_attack')}
-            >
-              + Suricata Web Attack
+            <button type="button" className="action-btn" onClick={onClearAlerts}>
+              Clear Alerts ({alerts.length})
             </button>
           </div>
         )}
