@@ -1,7 +1,6 @@
 export type NavSectionId =
   | 'dashboard'
   | 'alerts'
-  | 'dns'
   | 'monitoring'
   | 'rules'
   | 'ai_analyst'

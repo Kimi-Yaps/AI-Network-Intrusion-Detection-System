@@ -441,6 +441,8 @@ app.get('/api/alerts', (req, res) => {
 
 app.delete('/api/alerts', (_req, res) => {
   alerts.length = 0;
+  recentDnsQueries.length = 0;
+  telemetryHistory.length = 0;
   dnsCounts.clear();
   nxdomainCounts.clear();
   res.json({ cleared: true });

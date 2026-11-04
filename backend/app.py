@@ -483,6 +483,8 @@ def clear_alerts():
     alert_dedup_cache.clear()
     dns_counts.clear()
     nxdomain_counts.clear()
+    recent_dns_queries.clear()
+    telemetry_history.clear()
     if ALERTS_HISTORY_FILE.exists():
         ALERTS_HISTORY_FILE.unlink(missing_ok=True)
     return {"cleared": True}

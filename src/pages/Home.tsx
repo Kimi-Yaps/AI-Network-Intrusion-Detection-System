@@ -74,7 +74,6 @@ const INITIAL_CONFIG: ServerConfig = {
 const SECTION_TITLES: Record<NavSectionId, string> = {
   dashboard: 'Dashboard',
   alerts: 'Live Alerts & Anomalies',
-  dns: 'DNS Behavioral Telemetry',
   monitoring: 'Suricata & Zeek Sensors',
   rules: 'Risk & Anomaly Rules',
   ai_analyst: 'AI SOC Threat Analyst',
@@ -302,7 +301,7 @@ function Home() {
       trendLabel: `limit ${config.dns_anomaly.max_queries_per_client_per_minute}/m`,
       color: 'blue',
       iconSymbol: '◷',
-      onActionClick: () => setActiveSection('dns'),
+      onActionClick: () => setActiveSection('monitoring'),
     },
     {
       label: 'NXDOMAIN (5m)',
@@ -323,7 +322,7 @@ function Home() {
       trendLabel: `threshold ${config.dns_anomaly.high_entropy_threshold}b`,
       color: 'orange',
       iconSymbol: '⚡',
-      onActionClick: () => setActiveSection('dns'),
+      onActionClick: () => setActiveSection('monitoring'),
     },
     {
       label: 'Active Alerts',
@@ -365,7 +364,7 @@ function Home() {
       primaryText: 'Zeek DNS Analyzer',
       secondaryText: `${config.monitoring.zeek_log_dir}/dns.log`,
       metricText: `${status.tracked_dns_clients} hosts`,
-      onClick: () => setActiveSection('dns'),
+      onClick: () => setActiveSection('monitoring'),
     },
     {
       id: 'dep-hf',
@@ -453,19 +452,11 @@ function Home() {
             </>
           )}
 
-          {(activeSection === 'alerts' || activeSection === 'dns') && (
+          {activeSection === 'alerts' && (
             <AlertsTable
-              title={
-                activeSection === 'dns'
-                  ? 'DNS Behavioral Anomalies (Entropy, DGA, Floods, TLDs)'
-                  : 'All Suricata & Zeek Anomaly Alerts'
-              }
+              title="All Suricata & Zeek Anomaly Alerts"
               caption="Filtered live stream from /var/log/suricata/eve.json and /opt/zeek/logs/current/dns.log"
-              alerts={
-                activeSection === 'dns'
-                  ? filteredAlerts.filter((a) => a.category !== 'IDS signature')
-                  : filteredAlerts
-              }
+              alerts={filteredAlerts}
               analyzing={analyzing}
               onAnalyzeAlert={(a) => void analyzeWithAi(a)}
               onClearAlerts={() => void clearAllAlerts()}

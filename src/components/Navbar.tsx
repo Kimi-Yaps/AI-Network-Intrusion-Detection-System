@@ -29,7 +29,6 @@ function Navbar({
   const navItems: NavItemConfig[] = [
     { id: 'dashboard', label: 'Dashboard', icon: '⊞' },
     { id: 'alerts', label: 'Live Alerts', icon: '◷', badge: alertCount },
-    { id: 'dns', label: 'DNS Telemetry', icon: '◎' },
     { id: 'monitoring', label: 'Monitoring', icon: '▤' },
     { id: 'rules', label: 'Risk & Rules', icon: '⚡' },
     { id: 'ai_analyst', label: 'AI SOC Analyst', icon: '✦' },
