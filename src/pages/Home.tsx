@@ -477,19 +477,62 @@ function Home() {
             />
           )}
 
-          {(activeSection === 'configure' ||
-            activeSection === 'monitoring' ||
-            activeSection === 'system') && (
-            <div className="tm-bottom-grid">
-              <section className="dashboard-section" style={{ marginBottom: 0 }}>
-                <div className="tm-card-header">
-                  <h2 className="tm-card-title">
-                    Server Configuration ({config.config_path || '/etc/nads/config.yaml'})
-                  </h2>
-                </div>
-                <pre className="code-panel">{JSON.stringify(config, null, 2)}</pre>
-              </section>
+          {activeSection === 'monitoring' && (
+            <section className="dashboard-section">
+              <div className="tm-card-header">
+                <h2 className="tm-card-title">
+                  Live DNS Query Telemetry ({config.monitoring.suricata_eve_path})
+                </h2>
+                <span className="tm-pill-select">
+                  {(status.recent_dns_queries ?? []).length} recent queries
+                </span>
+              </div>
+              <div className="table-wrapper" tabIndex={0} role="region" aria-label="Live DNS Queries">
+                <table>
+                  <thead>
+                    <tr>
+                      <th scope="col">Time</th>
+                      <th scope="col">Client IP</th>
+                      <th scope="col">Queried Domain (rrname)</th>
+                      <th scope="col">Type</th>
+                      <th scope="col">RCode</th>
+                      <th scope="col">Entropy (bits)</th>
+                      <th scope="col">Client QPM</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(status.recent_dns_queries ?? []).length === 0 ? (
+                      <tr>
+                        <td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
+                          No live DNS queries captured yet. Run dig @{config.server.public_ip}{' '}
+                          example.com to test.
+                        </td>
+                      </tr>
+                    ) : (
+                      (status.recent_dns_queries ?? []).map((q) => (
+                        <tr key={q.id}>
+                          <td>{new Date(q.timestamp).toLocaleTimeString()}</td>
+                          <td>
+                            <code>{q.source_ip}</code>
+                          </td>
+                          <td>
+                            <code>{q.rrname || '(root)'}</code>
+                          </td>
+                          <td>{q.rrtype}</td>
+                          <td>{String(q.rcode ?? 'NOERROR')}</td>
+                          <td>{q.entropy}</td>
+                          <td>{q.qpm_for_client}</td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          )}
 
+          {activeSection === 'configure' && (
+            <div className="tm-bottom-grid">
               <section className="dashboard-section" style={{ marginBottom: 0 }}>
                 <div className="tm-card-header">
                   <h2 className="tm-card-title">Tune DNS Anomaly Thresholds</h2>
@@ -536,6 +579,7 @@ function Home() {
                     display: 'flex',
                     alignItems: 'center',
                     gap: '0.75rem',
+                    flexWrap: 'wrap',
                   }}
                 >
                   <button
@@ -545,12 +589,73 @@ function Home() {
                   >
                     Save to Server Config
                   </button>
+                  <button
+                    type="button"
+                    className="action-btn"
+                    onClick={async () => {
+                      await fetch(`${activeApi}/api/alerts`, { method: 'DELETE' });
+                      setConfigSaveMsg('Cleared alert history.');
+                      await loadTelemetry();
+                    }}
+                  >
+                    Clear Alert History
+                  </button>
                   {configSaveMsg && (
                     <span style={{ fontSize: '0.82rem', color: '#10b981', fontWeight: 600 }}>
                       {configSaveMsg}
                     </span>
                   )}
                 </div>
+              </section>
+
+              <section className="dashboard-section" style={{ marginBottom: 0 }}>
+                <div className="tm-card-header">
+                  <h2 className="tm-card-title">
+                    Server Configuration ({config.config_path || '/etc/nads/config.yaml'})
+                  </h2>
+                </div>
+                <pre className="code-panel">{JSON.stringify(config, null, 2)}</pre>
+              </section>
+            </div>
+          )}
+
+          {activeSection === 'system' && (
+            <div className="tm-bottom-grid">
+              <section className="dashboard-section" style={{ marginBottom: 0 }}>
+                <div className="tm-card-header">
+                  <h2 className="tm-card-title">Ubuntu Host &amp; Sensor Health</h2>
+                  <span className="tm-pill-select">
+                    {connected ? 'Backend Online' : 'Backend Offline'}
+                  </span>
+                </div>
+                <div className="config-form-grid">
+                  <div>
+                    <strong>Server Name:</strong> {status.server_name}
+                  </div>
+                  <div>
+                    <strong>OS:</strong> {config.server.os}
+                  </div>
+                  <div>
+                    <strong>Bind IP:</strong> <code>{status.public_ip}</code>
+                  </div>
+                  <div>
+                    <strong>Capture Interface:</strong> <code>{status.interface}</code>
+                  </div>
+                  <div>
+                    <strong>Suricata EVE Log:</strong>{' '}
+                    {status.suricata_log_exists ? 'Active (/var/log/suricata/eve.json)' : 'Missing'}
+                  </div>
+                  <div>
+                    <strong>Active API Endpoint:</strong> <code>{activeApi}</code>
+                  </div>
+                </div>
+              </section>
+
+              <section className="dashboard-section" style={{ marginBottom: 0 }}>
+                <div className="tm-card-header">
+                  <h2 className="tm-card-title">Live /api/status Payload</h2>
+                </div>
+                <pre className="code-panel">{JSON.stringify(status, null, 2)}</pre>
               </section>
             </div>
           )}

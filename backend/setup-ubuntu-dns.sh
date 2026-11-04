@@ -151,6 +151,11 @@ cd "${PROJECT_DIR}"
 npm install
 VITE_API_URL="http://${SERVER_IP}" npm run build
 
+# Restore ownership of project files to the non-root user if invoked via sudo
+if [ -n "${SUDO_USER:-}" ]; then
+    chown -R "${SUDO_USER}:${SUDO_USER}" "${PROJECT_DIR}/node_modules" "${PROJECT_DIR}/dist" 2>/dev/null || true
+fi
+
 # Copy production build to /var/www/nads so Nginx (www-data) never hits /home/<user> 0750 permission 500 errors
 mkdir -p /var/www/nads
 rm -rf /var/www/nads/*

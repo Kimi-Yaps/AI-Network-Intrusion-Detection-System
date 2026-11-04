@@ -93,6 +93,9 @@ IFACE="$(ip route | awk '/default/ {print $5; exit}')"
 SERVER_IP="$(ip -4 addr show "${IFACE:-ens33}" 2>/dev/null | awk '/inet / {split($2,a,"/"); print a[1]; exit}')"
 SERVER_IP="${SERVER_IP:-127.0.0.1}"
 
+# Ensure node_modules and dist are owned by the current user (in case setup ran under sudo)
+sudo chown -R "$(id -u):$(id -g)" "${PROJECT_DIR}/node_modules" "${PROJECT_DIR}/dist" "${PROJECT_DIR}/backend/data" 2>/dev/null || true
+
 npm install --no-audit --no-fund
 VITE_API_URL="http://${SERVER_IP}" npm run build
 
