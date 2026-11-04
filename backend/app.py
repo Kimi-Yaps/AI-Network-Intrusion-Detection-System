@@ -615,7 +615,7 @@ def analyze_anomaly(req: AnalyzeRequest):
     try:
         from google import genai
 
-        client = genai.Client(api_key=api_key)
+        client = genai.Client(api_key=api_key, http_options={"timeout": 8000})
         interaction = client.interactions.create(
             model="gemini-3.8-flash",
             input=prompt_text,
