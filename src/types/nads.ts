@@ -1,11 +1,8 @@
 export type NavSectionId =
   | 'dashboard'
   | 'alerts'
-  | 'monitoring'
-  | 'rules'
-  | 'ai_analyst'
-  | 'hf_bucket'
   | 'configure'
+  | 'hf_bucket'
   | 'system';
 
 export interface ServerConfig {

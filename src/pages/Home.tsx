@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import AlertsTable from '../components/AlertsTable';
+import AlertsTable, { deriveThreatAndOrigin } from '../components/AlertsTable';
 import EntityListCard from '../components/EntityListCard';
 import KpiCard from '../components/KpiCard';
 import Navbar from '../components/Navbar';
@@ -73,13 +73,10 @@ const INITIAL_CONFIG: ServerConfig = {
 
 const SECTION_TITLES: Record<NavSectionId, string> = {
   dashboard: 'Dashboard',
-  alerts: 'Live Alerts & Anomalies',
-  monitoring: 'Suricata & Zeek Sensors',
-  rules: 'Risk & Anomaly Rules',
-  ai_analyst: 'AI SOC Threat Analyst',
+  alerts: 'Attacks, Threat Assessment & Origin Trace',
+  configure: 'Detection Rules & Threshold Configuration',
   hf_bucket: 'Hugging Face Bucket & LangChain RAG',
-  configure: 'Server Configuration (/etc/nads/config.yaml)',
-  system: 'Ubuntu System Status',
+  system: 'Ubuntu System & Sensor Health',
 };
 
 function Home() {
@@ -125,7 +122,7 @@ function Home() {
   const [configSaveMsg, setConfigSaveMsg] = useState<string>('');
   const [configLoadedOnce, setConfigLoadedOnce] = useState<boolean>(false);
 
-  // AI Analyst state
+  // Threat Assessment & AI Analyst state
   const [selectedAlert, setSelectedAlert] = useState<AnomalyAlert | null>(null);
   const [customPrompt, setCustomPrompt] = useState<string>('');
   const [aiAnalysis, setAiAnalysis] = useState<string>('');
@@ -212,6 +209,8 @@ function Home() {
     try {
       await fetch(`${activeApi}/api/alerts`, { method: 'DELETE' });
       setAlerts([]);
+      setSelectedAlert(null);
+      setAiAnalysis('');
       await loadTelemetry();
     } catch {
       // ignore if backend unreachable
@@ -247,14 +246,41 @@ function Home() {
     }
   };
 
-  const analyzeWithAi = async (alertToInspect?: AnomalyAlert) => {
-    const target = alertToInspect || selectedAlert || alerts[0];
+  const buildLocalThreatReport = (target?: AnomalyAlert | null) => {
+    if (!target) {
+      return 'No active attack selected. Select any attack row from the table to inspect its threat score and origin.';
+    }
+    const info = deriveThreatAndOrigin(
+      target,
+      status.interface || 'ens33',
+      config.server.public_ip || '192.168.150.129'
+    );
+    return [
+      `=== NADS THREAT SCORE & ORIGIN ASSESSMENT ===`,
+      `• Threat Score      : ${info.score}/100 (${target.severity.toUpperCase()} RISK)`,
+      `• Attack Category   : ${target.category}`,
+      `• MITRE ATT&CK      : ${info.mitre}`,
+      `• Trigger Summary   : ${target.summary}`,
+      ``,
+      `=== WHERE IT ORIGINATED FROM ===`,
+      `• Source IP         : ${target.source_ip}`,
+      `• Network Origin    : ${info.originZone}`,
+      `• Ingress Path      : ${info.iface} -> ${info.target} (${info.proto})`,
+      `• Assessment        : ${info.possibleThreat}`,
+      ``,
+      `=== RECOMMENDED UBUNTU MITIGATION ===`,
+      info.remediationCmd,
+    ].join('\n');
+  };
+
+  const inspectAndAnalyzeAlert = async (alertToInspect?: AnomalyAlert) => {
+    const target = alertToInspect || selectedAlert || alerts[0] || null;
     if (alertToInspect) {
       setSelectedAlert(alertToInspect);
-      setActiveSection('ai_analyst');
+      setActiveSection('alerts');
     }
     setAnalyzing(true);
-    setAiAnalysis('');
+    setAiAnalysis(buildLocalThreatReport(target));
 
     try {
       const res = await fetch(`${activeApi}/api/analyze`, {
@@ -264,13 +290,17 @@ function Home() {
           alert_id: target?.id,
           prompt:
             customPrompt.trim() ||
-            `Analyze this ${target?.category || 'network'} alert from ${target?.source_ip || 'host'} (${target?.summary || 'live telemetry'}) correlated with our Hugging Face bucket dataset and provide Ubuntu/Suricata/Zeek mitigation steps.`,
+            `Score this ${target?.category || 'network'} threat from ${target?.source_ip || 'host'}, trace its origin, and provide Ubuntu/Suricata/UFW mitigation steps.`,
         }),
       });
-      const data = await res.json();
-      setAiAnalysis(data.text || data.detail || data.error || 'No analysis returned.');
+      if (res.ok) {
+        const data = await res.json();
+        if (data.text) {
+          setAiAnalysis(data.text);
+        }
+      }
     } catch {
-      setAiAnalysis('Backend API unreachable. Ensure nads-api or npm run server is running on port 8000.');
+      // Keep the instant deterministic threat & origin assessment displayed
     } finally {
       setAnalyzing(false);
     }
@@ -287,6 +317,15 @@ function Home() {
     );
   }, [alerts, searchQuery]);
 
+  const activeInspectedAlert = selectedAlert || filteredAlerts[0] || null;
+  const activeThreatInfo = activeInspectedAlert
+    ? deriveThreatAndOrigin(
+        activeInspectedAlert,
+        status.interface || 'ens33',
+        config.server.public_ip || '192.168.150.129'
+      )
+    : null;
+
   const liveQpm = status.metrics?.dns_queries_per_min ?? 0;
   const liveNx = status.metrics?.nxdomain_last_5m ?? 0;
   const liveEntropy = status.metrics?.max_entropy_bits ?? 0;
@@ -301,7 +340,7 @@ function Home() {
       trendLabel: `limit ${config.dns_anomaly.max_queries_per_client_per_minute}/m`,
       color: 'blue',
       iconSymbol: '◷',
-      onActionClick: () => setActiveSection('monitoring'),
+      onActionClick: () => setActiveSection('alerts'),
     },
     {
       label: 'NXDOMAIN (5m)',
@@ -311,7 +350,7 @@ function Home() {
       trendLabel: `max ratio ${config.dns_anomaly.max_nxdomain_ratio}`,
       color: 'yellow',
       iconSymbol: '⚑',
-      onActionClick: () => setActiveSection('monitoring'),
+      onActionClick: () => setActiveSection('alerts'),
     },
     {
       label: 'Peak Entropy',
@@ -322,7 +361,7 @@ function Home() {
       trendLabel: `threshold ${config.dns_anomaly.high_entropy_threshold}b`,
       color: 'orange',
       iconSymbol: '⚡',
-      onActionClick: () => setActiveSection('monitoring'),
+      onActionClick: () => setActiveSection('alerts'),
     },
     {
       label: 'Active Alerts',
@@ -337,15 +376,22 @@ function Home() {
   ];
 
   const palette = ['#ff6b00', '#2563eb', '#10b981', '#8b5cf6'];
-  const topSourceIpItems: EntityRowItem[] = filteredAlerts.slice(0, 4).map((alert, idx) => ({
-    id: `src-${alert.id}`,
-    initials: alert.source_ip.split('.').slice(-1)[0] || 'IP',
-    badgeColor: palette[idx % palette.length],
-    primaryText: alert.source_ip,
-    secondaryText: alert.category,
-    metricText: alert.severity.toUpperCase(),
-    onClick: () => void analyzeWithAi(alert),
-  }));
+  const topSourceIpItems: EntityRowItem[] = filteredAlerts.slice(0, 4).map((alert, idx) => {
+    const info = deriveThreatAndOrigin(
+      alert,
+      status.interface || 'ens33',
+      config.server.public_ip || '192.168.150.129'
+    );
+    return {
+      id: `src-${alert.id}`,
+      initials: alert.source_ip.split('.').slice(-1)[0] || 'IP',
+      badgeColor: palette[idx % palette.length],
+      primaryText: `${alert.source_ip} (${info.originZone.split('(')[0].trim()})`,
+      secondaryText: `${alert.category} → ${info.target}`,
+      metricText: `${info.score}/100`,
+      onClick: () => void inspectAndAnalyzeAlert(alert),
+    };
+  });
 
   const topSensorDepartments: EntityRowItem[] = [
     {
@@ -355,16 +401,16 @@ function Home() {
       primaryText: 'Suricata EVE Sensor',
       secondaryText: config.monitoring.suricata_eve_path,
       metricText: status.suricata_log_exists ? 'LIVE' : 'WAITING',
-      onClick: () => setActiveSection('monitoring'),
+      onClick: () => setActiveSection('alerts'),
     },
     {
       id: 'dep-zeek',
       initials: 'ZK',
       badgeColor: '#2563eb',
-      primaryText: 'Zeek DNS Analyzer',
-      secondaryText: `${config.monitoring.zeek_log_dir}/dns.log`,
+      primaryText: 'Active DNS Clients',
+      secondaryText: `Monitored on ${status.interface}`,
       metricText: `${status.tracked_dns_clients} hosts`,
-      onClick: () => setActiveSection('monitoring'),
+      onClick: () => setActiveSection('alerts'),
     },
     {
       id: 'dep-hf',
@@ -379,7 +425,7 @@ function Home() {
       id: 'dep-cfg',
       initials: 'CF',
       badgeColor: '#f59e0b',
-      primaryText: 'Ubuntu Server Config',
+      primaryText: 'Detection Rules & Config',
       secondaryText: config.config_path || '/etc/nads/config.yaml',
       metricText: config.server.listen_interface,
       onClick: () => setActiveSection('configure'),
@@ -427,182 +473,347 @@ function Home() {
 
               <div className="tm-bottom-grid">
                 <EntityListCard
-                  title="Top Source IPs"
-                  filterLabel="Live alert sources"
+                  title="Top Attacking Origins"
+                  filterLabel="Source IP & Threat Score"
                   items={topSourceIpItems}
-                  actionLabel="Triage"
+                  actionLabel="Assess"
                 />
 
                 <EntityListCard
                   title="Active Sensors & Config"
                   filterLabel="By subsystem"
                   items={topSensorDepartments}
-                  actionLabel="Inspect"
+                  actionLabel="Open"
                 />
               </div>
 
               <AlertsTable
-                title="Live Network & DNS Anomalies"
-                caption={`Live telemetry ingested from ${status.server_name} (${config.server.public_ip})`}
+                title="All Detected Attacks & Origin Trace"
+                caption={`Live telemetry from ${status.server_name} (${config.server.public_ip}) on ${status.interface}`}
                 alerts={filteredAlerts}
-                analyzing={analyzing}
-                onAnalyzeAlert={(a) => void analyzeWithAi(a)}
+                selectedAlertId={activeInspectedAlert?.id}
+                defaultIface={status.interface}
+                serverIp={config.server.public_ip}
+                onSelectAlert={(a) => void inspectAndAnalyzeAlert(a)}
                 onClearAlerts={() => void clearAllAlerts()}
               />
             </>
           )}
 
           {activeSection === 'alerts' && (
-            <AlertsTable
-              title="All Suricata & Zeek Anomaly Alerts"
-              caption="Filtered live stream from /var/log/suricata/eve.json and /opt/zeek/logs/current/dns.log"
-              alerts={filteredAlerts}
-              analyzing={analyzing}
-              onAnalyzeAlert={(a) => void analyzeWithAi(a)}
-              onClearAlerts={() => void clearAllAlerts()}
-            />
-          )}
+            <>
+              <AlertsTable
+                title="All Detected Attacks & Origin Trace"
+                caption="Click 'Assess Threat' on any attack row to inspect its origin path, threat score, MITRE mapping, and remediation."
+                alerts={filteredAlerts}
+                selectedAlertId={activeInspectedAlert?.id}
+                defaultIface={status.interface}
+                serverIp={config.server.public_ip}
+                onSelectAlert={(a) => void inspectAndAnalyzeAlert(a)}
+                onClearAlerts={() => void clearAllAlerts()}
+              />
 
-          {activeSection === 'monitoring' && (
-            <section className="dashboard-section">
-              <div className="tm-card-header">
-                <h2 className="tm-card-title">
-                  Live DNS Query Telemetry ({config.monitoring.suricata_eve_path})
-                </h2>
-                <span className="tm-pill-select">
-                  {(status.recent_dns_queries ?? []).length} recent queries
-                </span>
-              </div>
-              <div className="table-wrapper" tabIndex={0} role="region" aria-label="Live DNS Queries">
-                <table>
-                  <thead>
-                    <tr>
-                      <th scope="col">Time</th>
-                      <th scope="col">Client IP</th>
-                      <th scope="col">Queried Domain (rrname)</th>
-                      <th scope="col">Type</th>
-                      <th scope="col">RCode</th>
-                      <th scope="col">Entropy (bits)</th>
-                      <th scope="col">Client QPM</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {(status.recent_dns_queries ?? []).length === 0 ? (
-                      <tr>
-                        <td colSpan={7} style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
-                          No live DNS queries captured yet. Run dig @{config.server.public_ip}{' '}
-                          example.com to test.
-                        </td>
-                      </tr>
-                    ) : (
-                      (status.recent_dns_queries ?? []).map((q) => (
-                        <tr key={q.id}>
-                          <td>{new Date(q.timestamp).toLocaleTimeString()}</td>
-                          <td>
-                            <code>{q.source_ip}</code>
-                          </td>
-                          <td>
-                            <code>{q.rrname || '(root)'}</code>
-                          </td>
-                          <td>{q.rrtype}</td>
-                          <td>{String(q.rcode ?? 'NOERROR')}</td>
-                          <td>{q.entropy}</td>
-                          <td>{q.qpm_for_client}</td>
-                        </tr>
-                      ))
+              <div className="tm-bottom-grid">
+                <section className="dashboard-section" style={{ marginBottom: 0 }}>
+                  <div className="tm-card-header">
+                    <h2 className="tm-card-title">Possible Threat &amp; Origin Inspector</h2>
+                    {activeInspectedAlert && activeThreatInfo && (
+                      <span className={`severity-pill ${activeInspectedAlert.severity}`}>
+                        Score: {activeThreatInfo.score}/100 ({activeInspectedAlert.severity})
+                      </span>
                     )}
-                  </tbody>
-                </table>
+                  </div>
+
+                  {!activeInspectedAlert || !activeThreatInfo ? (
+                    <p style={{ fontSize: '0.84rem', color: 'var(--text-muted)', margin: 0 }}>
+                      No active attacks in the table. When Suricata or the DNS behavioral engine
+                      detects an attack, its origin and threat score will appear here automatically.
+                    </p>
+                  ) : (
+                    <div className="config-form-grid" style={{ gap: '0.7rem' }}>
+                      <div>
+                        <strong>Origin IP:</strong> <code>{activeInspectedAlert.source_ip}</code>
+                      </div>
+                      <div>
+                        <strong>Origin Network Zone:</strong> {activeThreatInfo.originZone}
+                      </div>
+                      <div>
+                        <strong>Ingress Path &amp; Target:</strong>{' '}
+                        <code>
+                          {activeThreatInfo.iface} → {activeThreatInfo.target} (
+                          {activeThreatInfo.proto})
+                        </code>
+                      </div>
+                      <div>
+                        <strong>Attack Category:</strong> {activeInspectedAlert.category}
+                      </div>
+                      <div style={{ gridColumn: '1 / -1' }}>
+                        <strong>MITRE ATT&amp;CK:</strong> {activeThreatInfo.mitre}
+                      </div>
+                      <div style={{ gridColumn: '1 / -1' }}>
+                        <strong>Possible Threat Assessment:</strong>{' '}
+                        {activeThreatInfo.possibleThreat}
+                      </div>
+                      <div style={{ gridColumn: '1 / -1' }}>
+                        <strong>Ubuntu Mitigation Command:</strong>
+                        <pre className="code-panel" style={{ marginTop: '0.35rem' }}>
+                          {activeThreatInfo.remediationCmd}
+                        </pre>
+                      </div>
+                    </div>
+                  )}
+                </section>
+
+                <section className="dashboard-section" style={{ marginBottom: 0 }}>
+                  <div className="tm-card-header">
+                    <h2 className="tm-card-title">AI &amp; LangChain Threat Scoring</h2>
+                    {activeInspectedAlert && (
+                      <span className="tm-pill-select">
+                        {activeInspectedAlert.source_ip} • {activeInspectedAlert.category}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ display: 'flex', gap: '0.6rem', marginBottom: '0.85rem' }}>
+                    <input
+                      type="text"
+                      value={customPrompt}
+                      onChange={(e) => setCustomPrompt(e.target.value)}
+                      placeholder="Ask about this threat score, origin IP, or mitigation..."
+                      style={{
+                        flex: 1,
+                        padding: '0.55rem 0.85rem',
+                        borderRadius: '8px',
+                        border: '1px solid var(--border-color)',
+                        background: 'var(--bg-subtle)',
+                        color: 'var(--text-primary)',
+                      }}
+                    />
+                    <button
+                      type="button"
+                      className="action-btn primary"
+                      onClick={() => void inspectAndAnalyzeAlert(activeInspectedAlert || undefined)}
+                      disabled={analyzing}
+                    >
+                      {analyzing ? 'Scoring...' : 'Score & Analyze'}
+                    </button>
+                  </div>
+                  <pre className="code-panel">
+                    {aiAnalysis || buildLocalThreatReport(activeInspectedAlert)}
+                  </pre>
+                </section>
               </div>
-            </section>
+
+              <section className="dashboard-section" style={{ marginTop: '1rem' }}>
+                <div className="tm-card-header">
+                  <h2 className="tm-card-title">
+                    Live DNS Query Stream ({config.monitoring.suricata_eve_path})
+                  </h2>
+                  <span className="tm-pill-select">
+                    {(status.recent_dns_queries ?? []).length} recent queries
+                  </span>
+                </div>
+                <div
+                  className="table-wrapper"
+                  tabIndex={0}
+                  role="region"
+                  aria-label="Live DNS Queries"
+                >
+                  <table>
+                    <thead>
+                      <tr>
+                        <th scope="col">Time</th>
+                        <th scope="col">Origin Client IP</th>
+                        <th scope="col">Queried Domain (rrname)</th>
+                        <th scope="col">Type</th>
+                        <th scope="col">RCode</th>
+                        <th scope="col">Entropy (bits)</th>
+                        <th scope="col">Client QPM</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(status.recent_dns_queries ?? []).length === 0 ? (
+                        <tr>
+                          <td
+                            colSpan={7}
+                            style={{ textAlign: 'center', color: 'var(--text-muted)' }}
+                          >
+                            No live DNS queries captured yet.
+                          </td>
+                        </tr>
+                      ) : (
+                        (status.recent_dns_queries ?? []).map((q) => (
+                          <tr key={q.id}>
+                            <td>{new Date(q.timestamp).toLocaleTimeString()}</td>
+                            <td>
+                              <code>{q.source_ip}</code>
+                            </td>
+                            <td>
+                              <code>{q.rrname || '(root)'}</code>
+                            </td>
+                            <td>{q.rrtype}</td>
+                            <td>{String(q.rcode ?? 'NOERROR')}</td>
+                            <td>{q.entropy}</td>
+                            <td>{q.qpm_for_client}</td>
+                          </tr>
+                        ))
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+            </>
           )}
 
           {activeSection === 'configure' && (
-            <div className="tm-bottom-grid">
-              <section className="dashboard-section" style={{ marginBottom: 0 }}>
-                <div className="tm-card-header">
-                  <h2 className="tm-card-title">Tune DNS Anomaly Thresholds</h2>
-                </div>
-                <div className="config-form-grid">
-                  <label>
-                    Max Queries / Client / Minute
-                    <input
-                      type="number"
-                      value={maxQpm}
-                      onChange={(e) => setMaxQpm(Number(e.target.value))}
-                    />
-                  </label>
-                  <label>
-                    Max NXDOMAIN Ratio (0.0 - 1.0)
-                    <input
-                      type="number"
-                      step="0.05"
-                      value={maxNxRatio}
-                      onChange={(e) => setMaxNxRatio(Number(e.target.value))}
-                    />
-                  </label>
-                  <label>
-                    Shannon Entropy Threshold (bits)
-                    <input
-                      type="number"
-                      step="0.1"
-                      value={entropyThreshold}
-                      onChange={(e) => setEntropyThreshold(Number(e.target.value))}
-                    />
-                  </label>
-                  <label>
-                    Suspicious TLDs (comma-separated)
-                    <input
-                      type="text"
-                      value={tldsInput}
-                      onChange={(e) => setTldsInput(e.target.value)}
-                    />
-                  </label>
-                </div>
-                <div
-                  style={{
-                    marginTop: '1rem',
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '0.75rem',
-                    flexWrap: 'wrap',
-                  }}
-                >
-                  <button
-                    type="button"
-                    className="action-btn primary"
-                    onClick={() => void handleSaveDnsConfig()}
-                  >
-                    Save to Server Config
-                  </button>
-                  <button
-                    type="button"
-                    className="action-btn"
-                    onClick={async () => {
-                      await fetch(`${activeApi}/api/alerts`, { method: 'DELETE' });
-                      setConfigSaveMsg('Cleared alert history.');
-                      await loadTelemetry();
+            <>
+              <div className="tm-bottom-grid">
+                <section className="dashboard-section" style={{ marginBottom: 0 }}>
+                  <div className="tm-card-header">
+                    <h2 className="tm-card-title">Tune DNS Anomaly Thresholds</h2>
+                  </div>
+                  <div className="config-form-grid">
+                    <label>
+                      Max Queries / Client / Minute
+                      <input
+                        type="number"
+                        value={maxQpm}
+                        onChange={(e) => setMaxQpm(Number(e.target.value))}
+                      />
+                    </label>
+                    <label>
+                      Max NXDOMAIN Ratio (0.0 - 1.0)
+                      <input
+                        type="number"
+                        step="0.05"
+                        value={maxNxRatio}
+                        onChange={(e) => setMaxNxRatio(Number(e.target.value))}
+                      />
+                    </label>
+                    <label>
+                      Shannon Entropy Threshold (bits)
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={entropyThreshold}
+                        onChange={(e) => setEntropyThreshold(Number(e.target.value))}
+                      />
+                    </label>
+                    <label>
+                      Suspicious TLDs (comma-separated)
+                      <input
+                        type="text"
+                        value={tldsInput}
+                        onChange={(e) => setTldsInput(e.target.value)}
+                      />
+                    </label>
+                  </div>
+                  <div
+                    style={{
+                      marginTop: '1rem',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.75rem',
+                      flexWrap: 'wrap',
                     }}
                   >
-                    Clear Alert History
-                  </button>
-                  {configSaveMsg && (
-                    <span style={{ fontSize: '0.82rem', color: '#10b981', fontWeight: 600 }}>
-                      {configSaveMsg}
-                    </span>
-                  )}
-                </div>
-              </section>
+                    <button
+                      type="button"
+                      className="action-btn primary"
+                      onClick={() => void handleSaveDnsConfig()}
+                    >
+                      Save to Server Config
+                    </button>
+                    <button
+                      type="button"
+                      className="action-btn"
+                      onClick={() => void clearAllAlerts()}
+                    >
+                      Clear Alert History
+                    </button>
+                    {configSaveMsg && (
+                      <span style={{ fontSize: '0.82rem', color: '#10b981', fontWeight: 600 }}>
+                        {configSaveMsg}
+                      </span>
+                    )}
+                  </div>
+                </section>
 
-              <section className="dashboard-section" style={{ marginBottom: 0 }}>
+                <section className="dashboard-section" style={{ marginBottom: 0 }}>
+                  <div className="tm-card-header">
+                    <h2 className="tm-card-title">
+                      Server Configuration ({config.config_path || '/etc/nads/config.yaml'})
+                    </h2>
+                  </div>
+                  <pre className="code-panel">{JSON.stringify(config, null, 2)}</pre>
+                </section>
+              </div>
+
+              <section className="dashboard-section" style={{ marginTop: '1rem' }}>
                 <div className="tm-card-header">
                   <h2 className="tm-card-title">
-                    Server Configuration ({config.config_path || '/etc/nads/config.yaml'})
+                    Active Detection Rules Matrix (Suricata EVE + DNS Behavioral Engine)
                   </h2>
                 </div>
-                <pre className="code-panel">{JSON.stringify(config, null, 2)}</pre>
+                <div
+                  tabIndex={0}
+                  role="region"
+                  aria-labelledby="dns-rules-caption"
+                  className="table-wrapper"
+                >
+                  <table>
+                    <caption id="dns-rules-caption">
+                      Active behavioral &amp; signature rules on {status.server_name} (
+                      {status.interface})
+                    </caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">Anomaly Type</th>
+                        <th scope="col">Detection Signal</th>
+                        <th scope="col">Active Threshold</th>
+                        <th scope="col">Initial SOC Response</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <th scope="row">DNS Flood</th>
+                        <td>Single client exceeds configured queries-per-minute window</td>
+                        <td>
+                          &gt; {config.dns_anomaly.max_queries_per_client_per_minute} queries/min
+                        </td>
+                        <td>Rate-limit or investigate internal/external host</td>
+                      </tr>
+                      <tr>
+                        <th scope="row">DGA / Malware C2</th>
+                        <td>Repeated NXDOMAIN (rcode=3) responses or high NXDOMAIN ratio</td>
+                        <td>
+                          &ge; 20 NXDOMAIN / 5m or ratio &ge;{' '}
+                          {config.dns_anomaly.max_nxdomain_ratio}
+                        </td>
+                        <td>Block/sinkhole &amp; query reputation feeds</td>
+                      </tr>
+                      <tr>
+                        <th scope="row">DNS Tunneling</th>
+                        <td>High Shannon entropy on subdomain labels, long names, TXT queries</td>
+                        <td>Entropy &gt; {config.dns_anomaly.high_entropy_threshold} bits</td>
+                        <td>Inspect host and UDP/53 egress policy</td>
+                      </tr>
+                      <tr>
+                        <th scope="row">Suspicious TLD</th>
+                        <td>Queries resolving newly registered or high-risk TLDs</td>
+                        <td>.{config.dns_anomaly.suspicious_tlds.join(', .')}</td>
+                        <td>Audit subsequent HTTP/TLS connections from source IP</td>
+                      </tr>
+                      <tr>
+                        <th scope="row">Web / Network Intrusion</th>
+                        <td>Suricata EVE alert on port scans, exploits, SQLi, or RCE</td>
+                        <td>Suricata severity 1–3 (excluding stream noise)</td>
+                        <td>Review source IP and block via UFW</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
               </section>
-            </div>
+            </>
           )}
 
           {activeSection === 'system' && (
@@ -644,121 +855,6 @@ function Home() {
                 <pre className="code-panel">{JSON.stringify(status, null, 2)}</pre>
               </section>
             </div>
-          )}
-
-          {activeSection === 'rules' && (
-            <section className="dashboard-section">
-              <div className="tm-card-header">
-                <h2 className="tm-card-title">
-                  DNS &amp; Web Anomaly Detection Matrix (Suricata EVE + Zeek dns.log)
-                </h2>
-              </div>
-              <div
-                tabIndex={0}
-                role="region"
-                aria-labelledby="dns-rules-caption"
-                className="table-wrapper"
-              >
-                <table>
-                  <caption id="dns-rules-caption">
-                    Active behavioral &amp; signature rules on {status.server_name} (
-                    {status.interface})
-                  </caption>
-                  <thead>
-                    <tr>
-                      <th scope="col">Anomaly Type</th>
-                      <th scope="col">Detection Signal</th>
-                      <th scope="col">Active Threshold</th>
-                      <th scope="col">Initial SOC Response</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr>
-                      <th scope="row">DNS Flood</th>
-                      <td>Single client exceeds configured queries-per-minute window</td>
-                      <td>
-                        &gt; {config.dns_anomaly.max_queries_per_client_per_minute} queries/min
-                      </td>
-                      <td>Rate-limit or investigate internal/external host</td>
-                    </tr>
-                    <tr>
-                      <th scope="row">DGA / Malware C2</th>
-                      <td>Repeated NXDOMAIN (rcode=3) responses or high NXDOMAIN ratio</td>
-                      <td>
-                        &ge; 20 NXDOMAIN / 5m or ratio &ge;{' '}
-                        {config.dns_anomaly.max_nxdomain_ratio}
-                      </td>
-                      <td>Block/sinkhole &amp; query reputation feeds</td>
-                    </tr>
-                    <tr>
-                      <th scope="row">DNS Tunneling</th>
-                      <td>High Shannon entropy on subdomain labels, long names, TXT queries</td>
-                      <td>Entropy &gt; {config.dns_anomaly.high_entropy_threshold} bits</td>
-                      <td>Inspect host and UDP/53 egress policy</td>
-                    </tr>
-                    <tr>
-                      <th scope="row">Suspicious TLD</th>
-                      <td>Queries resolving newly registered or high-risk TLDs</td>
-                      <td>.{config.dns_anomaly.suspicious_tlds.join(', .')}</td>
-                      <td>Audit Zeek conn.log for subsequent HTTP/TLS connections</td>
-                    </tr>
-                    <tr>
-                      <th scope="row">Web Attack</th>
-                      <td>Suricata EVE alert on HTTP, SQL injection, scanning, RCE</td>
-                      <td>Suricata severity 1–2</td>
-                      <td>Review source IP, Nginx access logs, and UFW rules</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            </section>
-          )}
-
-          {activeSection === 'ai_analyst' && (
-            <section className="dashboard-section">
-              <div className="tm-card-header">
-                <h2 className="tm-card-title">
-                  Gemini AI Threat Analyst (with LangChain HF Bucket Context)
-                </h2>
-                {selectedAlert && (
-                  <span className="tm-pill-select">
-                    Inspecting: {selectedAlert.category} ({selectedAlert.source_ip})
-                  </span>
-                )}
-              </div>
-              <div style={{ display: 'flex', gap: '0.6rem', marginBottom: '0.85rem' }}>
-                <input
-                  type="text"
-                  value={customPrompt}
-                  onChange={(e) => setCustomPrompt(e.target.value)}
-                  placeholder="Ask Gemini about a DNS anomaly, Suricata rule, or UFW mitigation..."
-                  style={{
-                    flex: 1,
-                    padding: '0.55rem 0.85rem',
-                    borderRadius: '8px',
-                    border: '1px solid var(--border-color)',
-                    background: 'var(--bg-subtle)',
-                    color: 'var(--text-primary)',
-                  }}
-                />
-                <button
-                  type="button"
-                  className="action-btn primary"
-                  onClick={() => void analyzeWithAi()}
-                  disabled={analyzing}
-                >
-                  {analyzing ? 'Analyzing...' : 'Run AI Triage'}
-                </button>
-              </div>
-              {aiAnalysis ? (
-                <pre className="code-panel">{aiAnalysis}</pre>
-              ) : (
-                <p style={{ fontSize: '0.84rem', color: 'var(--text-muted)', margin: 0 }}>
-                  Click &ldquo;Run AI Triage&rdquo; or select any alert from the Dashboard to
-                  generate Ubuntu Suricata/Zeek/UFW remediation commands.
-                </p>
-              )}
-            </section>
           )}
 
           {activeSection === 'hf_bucket' && (

@@ -28,13 +28,10 @@ function Navbar({
 }: NavbarProps) {
   const navItems: NavItemConfig[] = [
     { id: 'dashboard', label: 'Dashboard', icon: '⊞' },
-    { id: 'alerts', label: 'Live Alerts', icon: '◷', badge: alertCount },
-    { id: 'monitoring', label: 'Monitoring', icon: '▤' },
-    { id: 'rules', label: 'Risk & Rules', icon: '⚡' },
-    { id: 'ai_analyst', label: 'AI SOC Analyst', icon: '✦' },
+    { id: 'alerts', label: 'Attacks & Threat Origin', icon: '🛡', badge: alertCount },
+    { id: 'configure', label: 'Rules & Thresholds', icon: '⚡' },
     { id: 'hf_bucket', label: 'HF Bucket & RAG', icon: '⛁' },
-    { id: 'configure', label: 'Configure', icon: '🛠' },
-    { id: 'system', label: 'System', icon: '▣' },
+    { id: 'system', label: 'System Health', icon: '▣' },
   ];
 
   return (
