@@ -1,18 +1,19 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import AlertsTable, { deriveThreatAndOrigin } from '../components/AlertsTable';
+import AlertsTable from '../components/AlertsTable';
 import EntityListCard from '../components/EntityListCard';
 import KpiCard from '../components/KpiCard';
 import Navbar from '../components/Navbar';
 import OverviewChart from '../components/OverviewChart';
 import TopHeader from '../components/TopHeader';
-import type {
-  AnomalyAlert,
-  EntityRowItem,
-  KpiCardProps,
-  LangChainDatasetPayload,
-  NavSectionId,
-  ServerConfig,
-  ServerStatus,
+import {
+  deriveThreatAndOrigin,
+  type AnomalyAlert,
+  type EntityRowItem,
+  type KpiCardProps,
+  type LangChainDatasetPayload,
+  type NavSectionId,
+  type ServerConfig,
+  type ServerStatus,
 } from '../types/nads';
 
 function getApiCandidates(): string[] {
